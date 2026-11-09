@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -209,3 +209,278 @@ def reject_review(review_id: int, x_admin_key: str = Header(default="")):
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail="Review not found.")
     return {"success": True}
+
+# ---------------- Razorpay subscriptions integration ----------------
+import base64
+import hashlib
+import hmac
+import time
+import urllib.error
+import urllib.request
+
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "").strip()
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "").strip()
+RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "").strip()
+RAZORPAY_PLAN_ID = os.getenv("RAZORPAY_PLAN_ID", "plan_Ty9odB5ggH2smm").strip()
+TRIAL_AMOUNT_PAISE = 100
+TRIAL_START_DELAY_SECONDS = 24 * 60 * 60
+
+def payment_db_init():
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS payment_orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id TEXT UNIQUE NOT NULL,
+                payment_id TEXT,
+                plan_type TEXT NOT NULL,
+                amount INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'created',
+                customer_name TEXT,
+                customer_email TEXT,
+                customer_contact TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subscription_id TEXT UNIQUE NOT NULL,
+                plan_type TEXT NOT NULL,
+                plan_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                customer_name TEXT,
+                customer_email TEXT,
+                customer_contact TEXT,
+                trial_order_id TEXT,
+                first_charge_at INTEGER,
+                latest_payment_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+
+payment_db_init()
+
+def razorpay_request(method: str, path: str, payload=None):
+    if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
+        raise HTTPException(status_code=503, detail="Razorpay keys are not configured on the backend.")
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    token = base64.b64encode(f"{RAZORPAY_KEY_ID}:{RAZORPAY_KEY_SECRET}".encode()).decode()
+    request = urllib.request.Request(
+        "https://api.razorpay.com/v1" + path,
+        data=body,
+        method=method,
+        headers={"Authorization": "Basic " + token, "Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=25) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.loads(exc.read().decode("utf-8")).get("error", {}).get("description", "Razorpay request failed.")
+        except Exception:
+            detail = "Razorpay request failed."
+        raise HTTPException(status_code=502, detail=detail)
+    except (urllib.error.URLError, TimeoutError):
+        raise HTTPException(status_code=502, detail="Could not connect to Razorpay. Please try again.")
+
+def verify_signature(message: str, signature: str, secret: str):
+    expected = hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature or "")
+
+def clean_customer(value, max_len):
+    return str(value or "").strip()[:max_len]
+
+class CheckoutCustomer(BaseModel):
+    name: str = Field(default="", max_length=100)
+    email: str = Field(default="", max_length=150)
+    contact: str = Field(default="", max_length=20)
+
+class TrialOrderRequest(CheckoutCustomer):
+    pass
+
+class TrialCompleteRequest(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+
+class SubscriptionVerifyRequest(BaseModel):
+    razorpay_payment_id: str
+    razorpay_subscription_id: str
+    razorpay_signature: str
+
+def save_subscription(sub, plan_type, customer, trial_order_id=None, first_charge_at=None):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO subscriptions
+            (subscription_id, plan_type, plan_id, status, customer_name, customer_email,
+             customer_contact, trial_order_id, first_charge_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(subscription_id) DO UPDATE SET
+              status=excluded.status, updated_at=excluded.updated_at
+        """, (
+            sub["id"], plan_type, RAZORPAY_PLAN_ID, sub.get("status", "created"),
+            customer.get("name", ""), customer.get("email", ""), customer.get("contact", ""),
+            trial_order_id, first_charge_at, now, now
+        ))
+        conn.commit()
+
+@app.get("/api/payments/config")
+def payments_config():
+    if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
+        return {"enabled": False, "message": "Payments are being configured."}
+    return {"enabled": True, "key_id": RAZORPAY_KEY_ID, "plan_id": RAZORPAY_PLAN_ID}
+
+@app.post("/api/payments/trial/order")
+def create_trial_order(data: TrialOrderRequest):
+    if not RAZORPAY_PLAN_ID:
+        raise HTTPException(status_code=503, detail="Razorpay monthly plan is not configured.")
+    customer = {
+        "name": clean_customer(data.name, 100),
+        "email": clean_customer(data.email, 150),
+        "contact": clean_customer(data.contact, 20)
+    }
+    order = razorpay_request("POST", "/orders", {
+        "amount": TRIAL_AMOUNT_PAISE,
+        "currency": "INR",
+        "receipt": "ir_trial_" + str(int(time.time())),
+        "notes": {"plan_type": "trial_1_then_159", "customer_name": customer["name"]}
+    })
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO payment_orders
+            (order_id, plan_type, amount, status, customer_name, customer_email, customer_contact, created_at, updated_at)
+            VALUES (?, 'trial_1_then_159', ?, 'created', ?, ?, ?, ?, ?)
+        """, (order["id"], TRIAL_AMOUNT_PAISE, customer["name"], customer["email"], customer["contact"], now, now))
+        conn.commit()
+    return {"order_id": order["id"], "amount": order["amount"], "currency": order["currency"], "key_id": RAZORPAY_KEY_ID}
+
+@app.post("/api/payments/trial/complete")
+def complete_trial(data: TrialCompleteRequest):
+    if not verify_signature(
+        data.razorpay_order_id + "|" + data.razorpay_payment_id,
+        data.razorpay_signature, RAZORPAY_KEY_SECRET
+    ):
+        raise HTTPException(status_code=400, detail="Invalid payment signature.")
+    payment = razorpay_request("GET", "/payments/" + data.razorpay_payment_id)
+    if payment.get("order_id") != data.razorpay_order_id or payment.get("amount") != TRIAL_AMOUNT_PAISE or payment.get("status") != "captured":
+        raise HTTPException(status_code=400, detail="The ₹1 payment is not confirmed as captured.")
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM payment_orders WHERE order_id=?", (data.razorpay_order_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Trial order not found.")
+        conn.execute("UPDATE payment_orders SET payment_id=?, status='captured', updated_at=? WHERE order_id=?",
+                     (data.razorpay_payment_id, datetime.now(timezone.utc).isoformat(), data.razorpay_order_id))
+        existing = conn.execute("SELECT subscription_id FROM subscriptions WHERE trial_order_id=?", (data.razorpay_order_id,)).fetchone()
+        conn.commit()
+    if existing:
+        sub = razorpay_request("GET", "/subscriptions/" + existing["subscription_id"])
+        return {"subscription_id": sub["id"], "status": sub.get("status"), "start_at": sub.get("start_at")}
+    customer = {"name": row["customer_name"], "email": row["customer_email"], "contact": row["customer_contact"]}
+    first_charge_at = int(time.time()) + TRIAL_START_DELAY_SECONDS
+    sub = razorpay_request("POST", "/subscriptions", {
+        "plan_id": RAZORPAY_PLAN_ID,
+        "total_count": 1200,
+        "quantity": 1,
+        "customer_notify": False,
+        "start_at": first_charge_at,
+        "notes": {
+            "plan_type": "trial_1_then_159",
+            "trial_order_id": data.razorpay_order_id,
+            "customer_name": customer["name"]
+        }
+    })
+    save_subscription(sub, "trial_1_then_159", customer, data.razorpay_order_id, first_charge_at)
+    return {"subscription_id": sub["id"], "status": sub.get("status"), "start_at": first_charge_at}
+
+@app.post("/api/payments/monthly/create")
+def create_monthly_subscription(data: CheckoutCustomer):
+    customer = {
+        "name": clean_customer(data.name, 100),
+        "email": clean_customer(data.email, 150),
+        "contact": clean_customer(data.contact, 20)
+    }
+    sub = razorpay_request("POST", "/subscriptions", {
+        "plan_id": RAZORPAY_PLAN_ID,
+        "total_count": 1200,
+        "quantity": 1,
+        "customer_notify": False,
+        "notes": {"plan_type": "direct_159_monthly", "customer_name": customer["name"]}
+    })
+    save_subscription(sub, "direct_159_monthly", customer)
+    return {"subscription_id": sub["id"], "status": sub.get("status"), "key_id": RAZORPAY_KEY_ID}
+
+@app.post("/api/payments/subscription/verify")
+def verify_subscription(data: SubscriptionVerifyRequest):
+    if not verify_signature(
+        data.razorpay_payment_id + "|" + data.razorpay_subscription_id,
+        data.razorpay_signature, RAZORPAY_KEY_SECRET
+    ):
+        raise HTTPException(status_code=400, detail="Invalid subscription signature.")
+    sub = razorpay_request("GET", "/subscriptions/" + data.razorpay_subscription_id)
+    payment = razorpay_request("GET", "/payments/" + data.razorpay_payment_id)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute("""
+            UPDATE subscriptions SET status=?, latest_payment_id=?, updated_at=? WHERE subscription_id=?
+        """, (sub.get("status", "created"), data.razorpay_payment_id, now, data.razorpay_subscription_id))
+        conn.execute("""
+            INSERT OR IGNORE INTO payment_orders
+            (order_id, payment_id, plan_type, amount, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, ("subauth_" + data.razorpay_subscription_id, data.razorpay_payment_id,
+              "trial_1_then_159" if any(x for x in [sub.get("notes", {}).get("trial_order_id")]) else "direct_159_monthly",
+              payment.get("amount", 0), payment.get("status", "authorized"), now, now))
+        conn.commit()
+    return {"success": True, "subscription_status": sub.get("status"), "payment_status": payment.get("status")}
+
+@app.post("/api/payments/webhook")
+async def razorpay_webhook(request: Request):
+    raw = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature", "")
+    if not RAZORPAY_WEBHOOK_SECRET or not verify_signature(raw.decode("utf-8"), signature, RAZORPAY_WEBHOOK_SECRET):
+        raise HTTPException(status_code=400, detail="Invalid webhook signature.")
+    try:
+        event = json.loads(raw.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.")
+    payload = event.get("payload", {})
+    sub_entity = payload.get("subscription", {}).get("entity", {})
+    pay_entity = payload.get("payment", {}).get("entity", {})
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        if sub_entity.get("id"):
+            conn.execute("UPDATE subscriptions SET status=?, updated_at=? WHERE subscription_id=?",
+                         (sub_entity.get("status", "unknown"), now, sub_entity["id"]))
+        if pay_entity.get("id"):
+            sub_id = pay_entity.get("subscription_id", "")
+            conn.execute("""
+                INSERT INTO payment_orders
+                (order_id, payment_id, plan_type, amount, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(order_id) DO UPDATE SET payment_id=excluded.payment_id,
+                status=excluded.status, updated_at=excluded.updated_at
+            """, ("webhook_" + pay_entity["id"], pay_entity["id"],
+                  "subscription_payment" if sub_id else "one_time",
+                  pay_entity.get("amount", 0), pay_entity.get("status", "unknown"), now, now))
+            if sub_id:
+                conn.execute("UPDATE subscriptions SET latest_payment_id=?, updated_at=? WHERE subscription_id=?",
+                             (pay_entity["id"], now, sub_id))
+        conn.commit()
+    return {"received": True}
+
+@app.get("/api/admin/payments")
+def admin_payments(x_admin_key: str = Header(default="")):
+    require_admin(x_admin_key)
+    with get_db() as conn:
+        orders = conn.execute("SELECT * FROM payment_orders ORDER BY id DESC LIMIT 500").fetchall()
+        subs = conn.execute("SELECT * FROM subscriptions ORDER BY id DESC LIMIT 500").fetchall()
+    return {
+        "success": True,
+        "payments": [dict(row) for row in orders],
+        "subscriptions": [dict(row) for row in subs]
+    }

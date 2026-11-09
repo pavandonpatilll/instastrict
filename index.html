@@ -75,6 +75,16 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
  .policy-card{padding:18px}
  .policy-links{gap:9px}
 }
+
+.payment-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:22px}
+.payment-option{background:#101221;border:1px solid #514066;border-radius:14px;padding:18px;text-align:left}
+.payment-option h4{color:#ff9aca;margin-bottom:8px;font-size:18px}
+.payment-option p{color:#c4c4d2;font-size:13px;line-height:1.6;margin:7px 0}
+.payment-option button{width:100%}
+.payment-fields{margin-top:18px;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.payment-fields input{margin:0}
+#paymentStatus{color:#ffb4d7;margin-top:12px;line-height:1.6;font-size:13px}
+@media(max-width:600px){.payment-fields{grid-template-columns:1fr}}
 </style>
 </head>
 
@@ -325,6 +335,124 @@ const $ = id => document.getElementById(id);
 const escapeHtml = value => String(value).replace(/[&<>"']/g, c => ({
  "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"
 }[c]));
+
+let razorpayKeyId = "";
+let paymentBusy = false;
+
+async function loadPaymentConfig(){
+ try{
+  const response=await fetch(API+"/api/payments/config");
+  const data=await response.json();
+  if(data.enabled) razorpayKeyId=data.key_id;
+  else $("paymentStatus").textContent=data.message||"Payments are temporarily unavailable.";
+ }catch(error){
+  $("paymentStatus").textContent="Payment service is temporarily unavailable. Please try again later.";
+ }
+}
+function customerDetails(){
+ return {
+  name:$("payName").value.trim(),
+  email:$("payEmail").value.trim(),
+  contact:$("payPhone").value.trim()
+ };
+}
+function setPaymentBusy(value, message){
+ paymentBusy=value;
+ $("trialPayBtn").disabled=value;
+ $("monthlyPayBtn").disabled=value;
+ if(message) $("paymentStatus").textContent=message;
+}
+function openSubscriptionCheckout(subscriptionId, planTitle){
+ if(!razorpayKeyId) throw new Error("Payment configuration is not ready. Refresh the page.");
+ const customer=customerDetails();
+ const checkout=new Razorpay({
+  key:razorpayKeyId,
+  subscription_id:subscriptionId,
+  name:"InstaRaksha",
+  description:planTitle,
+  prefill:{name:customer.name,email:customer.email,contact:customer.contact},
+  theme:{color:"#c34bd2"},
+  handler:async function(response){
+   try{
+    const result=await fetch(API+"/api/payments/subscription/verify",{
+     method:"POST",
+     headers:{"Content-Type":"application/json"},
+     body:JSON.stringify({
+      razorpay_payment_id:response.razorpay_payment_id,
+      razorpay_subscription_id:response.razorpay_subscription_id,
+      razorpay_signature:response.razorpay_signature
+     })
+    });
+    const data=await result.json();
+    if(!result.ok) throw new Error(data.detail||"Could not verify subscription authorization.");
+    $("paymentStatus").textContent="Mandate response received. Subscription status: "+(data.subscription_status||"processing")+". Payment status: "+(data.payment_status||"processing")+". Please wait for Razorpay confirmation.";
+   }catch(error){
+    $("paymentStatus").textContent="Payment response received, but server verification needs checking: "+error.message;
+   }finally{setPaymentBusy(false);}
+  },
+  modal:{ondismiss:function(){setPaymentBusy(false,"Checkout closed. If you approved the mandate, wait for Razorpay confirmation before retrying.");}}
+ });
+ checkout.open();
+}
+async function startTrialPayment(){
+ if(paymentBusy)return;
+ setPaymentBusy(true,"Creating your ₹1 payment…");
+ try{
+  const response=await fetch(API+"/api/payments/trial/order",{
+   method:"POST",headers:{"Content-Type":"application/json"},
+   body:JSON.stringify(customerDetails())
+  });
+  const order=await response.json();
+  if(!response.ok)throw new Error(order.detail||"Could not create ₹1 payment.");
+  const customer=customerDetails();
+  const checkout=new Razorpay({
+   key:order.key_id,order_id:order.order_id,amount:order.amount,currency:order.currency,
+   name:"InstaRaksha",description:"₹1 trial payment",
+   prefill:{name:customer.name,email:customer.email,contact:customer.contact},
+   theme:{color:"#c34bd2"},
+   handler:async function(payment){
+    try{
+     $("paymentStatus").textContent="₹1 payment received. Verifying it and preparing your ₹159/month mandate…";
+     const complete=await fetch(API+"/api/payments/trial/complete",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+       razorpay_order_id:payment.razorpay_order_id,
+       razorpay_payment_id:payment.razorpay_payment_id,
+       razorpay_signature:payment.razorpay_signature
+      })
+     });
+     const data=await complete.json();
+     if(!complete.ok)throw new Error(data.detail||"Could not verify trial payment.");
+     $("paymentStatus").textContent="₹1 payment verified. Next, approve the ₹159/month AutoPay mandate in the UPI app.";
+     openSubscriptionCheckout(data.subscription_id,"₹159/month AutoPay after 24 hours");
+    }catch(error){
+     setPaymentBusy(false,"₹1 payment response needs attention: "+error.message);
+    }
+   },
+   modal:{ondismiss:function(){setPaymentBusy(false,"Payment window closed. Check your payment status before trying again.");}}
+  });
+  checkout.open();
+ }catch(error){
+  setPaymentBusy(false,error.message);
+ }
+}
+async function startMonthlyPayment(){
+ if(paymentBusy)return;
+ setPaymentBusy(true,"Creating your ₹159/month subscription…");
+ try{
+  const response=await fetch(API+"/api/payments/monthly/create",{
+   method:"POST",headers:{"Content-Type":"application/json"},
+   body:JSON.stringify(customerDetails())
+  });
+  const data=await response.json();
+  if(!response.ok)throw new Error(data.detail||"Could not create subscription.");
+  setPaymentBusy(false);
+  openSubscriptionCheckout(data.subscription_id,"InstaRaksha ₹159 monthly subscription");
+ }catch(error){
+  setPaymentBusy(false,error.message);
+ }
+}
+
 
 async function checkProfile(){
  const btn=$("checkBtn"), result=$("result");

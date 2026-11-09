@@ -55,6 +55,21 @@ a{color:#e8a5ff;overflow-wrap:anywhere}.tablewrap{overflow-x:auto}small,.muted{c
 </div>
 </div>
 
+<div class="card">
+ <h3>Payment Records</h3>
+ <p class="muted">₹1 trial payments and subscription payment events.</p>
+ <div class="tablewrap"><table>
+  <thead><tr><th>ID</th><th>Type</th><th>Order / Record</th><th>Payment ID</th><th>Amount</th><th>Status</th><th>Customer</th><th>Date</th></tr></thead>
+  <tbody id="paymentRows"><tr><td colspan="8">Please login first.</td></tr></tbody>
+ </table></div>
+</div>
+<div class="card">
+ <h3>Subscriptions</h3>
+ <div class="tablewrap"><table>
+  <thead><tr><th>ID</th><th>Plan option</th><th>Subscription ID</th><th>Plan ID</th><th>Status</th><th>First charge scheduled</th><th>Customer</th><th>Updated</th></tr></thead>
+  <tbody id="subscriptionRows"><tr><td colspan="8">Please login first.</td></tr></tbody>
+ </table></div>
+</div>
 <script>
 const API="https://instastrict.onrender.com";
 let adminKey="";
@@ -94,6 +109,25 @@ async function loadDashboard(){
      </tr>`).join("")
    :'<tr><td colspan="6">No reviews submitted yet.</td></tr>';
 
+
+  const paymentResponse=await fetch(API+"/api/admin/payments",{headers:{"X-Admin-Key":adminKey}});
+  const paymentData=await paymentResponse.json();
+  if(!paymentResponse.ok)throw new Error(paymentData.detail||"Could not load payment records.");
+  document.getElementById("paymentRows").innerHTML=paymentData.payments.length
+   ?paymentData.payments.map(item=>`<tr>
+     <td>${item.id}</td><td>${safe(item.plan_type)}</td><td>${safe(item.order_id)}</td>
+     <td>${safe(item.payment_id||"—")}</td><td>₹${(Number(item.amount||0)/100).toFixed(2)}</td>
+     <td>${safe(item.status)}</td><td>${safe(item.customer_name||"—")}<br><small>${safe(item.customer_email||item.customer_contact||"")}</small></td>
+     <td>${safe(new Date(item.created_at).toLocaleString())}</td></tr>`).join("")
+   :'<tr><td colspan="8">No payment records yet.</td></tr>';
+  document.getElementById("subscriptionRows").innerHTML=paymentData.subscriptions.length
+   ?paymentData.subscriptions.map(item=>`<tr>
+     <td>${item.id}</td><td>${safe(item.plan_type)}</td><td>${safe(item.subscription_id)}</td>
+     <td>${safe(item.plan_id)}</td><td>${safe(item.status)}</td>
+     <td>${item.first_charge_at?safe(new Date(item.first_charge_at*1000).toLocaleString()):"As per monthly schedule"}</td>
+     <td>${safe(item.customer_name||"—")}<br><small>${safe(item.customer_email||item.customer_contact||"")}</small></td>
+     <td>${safe(new Date(item.updated_at).toLocaleString())}</td></tr>`).join("")
+   :'<tr><td colspan="8">No subscriptions yet.</td></tr>';
   status.textContent="✓ Admin access successful";
  }catch(error){status.textContent="Error: "+error.message;}
 }
