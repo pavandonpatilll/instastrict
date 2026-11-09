@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>InstaRaksha - Instagram Safety Guidance</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;background:#090b16;color:white}
+header{padding:22px 7%;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #29263a}
+.logo{font-size:25px;font-weight:900;color:#ff70b8}.logo span{color:#fff}
+nav a{color:#ddd;text-decoration:none;margin-left:20px;font-size:14px}
+.hero{padding:75px 20px 65px;text-align:center;background:radial-gradient(ellipse at top,#42205d,#090b16 70%)}
+.tag{display:inline-block;border:1px solid #a65cce;padding:9px 17px;border-radius:30px;color:#e6b5ff;font-size:13px}
+h1{font-size:clamp(36px,6vw,65px);margin:24px 0 15px;line-height:1.1}h1 span{color:#ff73b7}
+.hero p{color:#c4c4d2;max-width:680px;margin:auto;line-height:1.7}
+.panel,.card{background:#171827;border:1px solid #353348;border-radius:20px;padding:25px;max-width:720px;margin:30px auto 0;text-align:left}
+.panel label,.fieldlabel{display:block;margin:14px 0 10px;font-weight:bold}
+input,textarea{width:100%;padding:15px;border-radius:10px;border:1px solid #49445d;background:#0e1020;color:white;font-size:15px;outline:none}
+button{padding:15px;border:0;border-radius:10px;margin-top:14px;background:linear-gradient(90deg,#a33bdf,#fa4d9e);color:white;font-weight:bold;font-size:16px;cursor:pointer}
+button:disabled{opacity:.6;cursor:wait}.full{width:100%}
+#result{display:none;margin-top:18px;background:#222338;padding:20px;border-radius:12px;line-height:1.7;font-size:14px}
+#result ul{padding-left:20px;margin-top:10px}
+.notice{font-size:12px;color:#aaa;margin-top:14px;line-height:1.6}
+section{padding:65px 7%;text-align:center}section h2{font-size:32px;margin-bottom:25px}
+.features,.review-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:18px}
+.feature,.review-card{background:#171827;border:1px solid #333248;padding:25px;border-radius:16px;text-align:left}
+.feature .emoji{font-size:28px}.feature h3{margin:15px 0 9px}.feature p,.review-card p{font-size:14px;color:#aaa;line-height:1.7}
+.check-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:15px 0}
+.check-item{display:flex;align-items:center;gap:10px;padding:12px;background:#101221;border:1px solid #353348;border-radius:10px;text-align:left;font-size:14px}
+.check-item input{width:auto;accent-color:#d64cba}
+.score-row{display:flex;align-items:center;gap:16px;margin:15px 0}.score{font-size:42px;font-weight:bold;color:#ff83c2}
+.meter{height:10px;background:#39364b;border-radius:20px;overflow:hidden;flex:1}.meter div{height:100%;background:linear-gradient(90deg,#a33bdf,#ff73b7)}
+.stars{display:flex;gap:8px;margin:10px 0}.star{font-size:28px;color:#777;cursor:pointer}.star.active{color:#ffc45b}
+.review-card{padding:18px}.review-head{display:flex;justify-content:space-between;gap:8px}.review-stars{color:#ffc45b}
+footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;font-size:13px;line-height:1.8}
+@media(max-width:600px){header{padding:20px 5%}nav a{margin-left:10px;font-size:12px}.hero{padding-top:55px}.panel{padding:18px}.check-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+ <div class="logo">Insta<span>Raksha</span> 🛡️</div>
+ <nav><a href="#features">Features</a><a href="#check">Safety Check</a><a href="#reviews">Reviews</a></nav>
+</header>
+
+<div class="hero">
+ <div class="tag">🛡️ YOUR DIGITAL SAFETY MATTERS</div>
+ <h1>Protect Your <span>Instagram</span><br>Account Smarter</h1>
+ <p>Learn safer Instagram habits, review essential security settings and get practical guidance against common online threats.</p>
+ <div class="panel" id="check">
+  <label for="profile">Enter your Instagram profile link</label>
+  <input id="profile" type="url" placeholder="https://www.instagram.com/username/">
+  <div class="fieldlabel">Your security checklist</div>
+  <div class="check-grid">
+   <label class="check-item"><input type="checkbox" id="two_factor"> Two-factor authentication is ON</label>
+   <label class="check-item"><input type="checkbox" id="unique_password"> I use a unique password</label>
+   <label class="check-item"><input type="checkbox" id="email_phone"> Recovery email and phone are current</label>
+   <label class="check-item"><input type="checkbox" id="login_activity"> I review login activity</label>
+   <label class="check-item"><input type="checkbox" id="third_party_apps"> I remove unknown third-party apps</label>
+  </div>
+  <button class="full" id="checkBtn" onclick="checkProfile()">Generate My Safety Report →</button>
+  <div id="result"></div>
+  <p class="notice">Never enter your Instagram password, OTP or recovery code here. This is a self-assessment based on your answers, not an Instagram account scan and not a guarantee against suspension.</p>
+ </div>
+</div>
+
+<section id="features">
+ <h2>Your Account Safety Toolkit</h2>
+ <div class="features">
+  <div class="feature"><div class="emoji">🔐</div><h3>Account Security</h3><p>Learn about strong passwords and two-factor authentication.</p></div>
+  <div class="feature"><div class="emoji">🚨</div><h3>Scam Awareness</h3><p>Recognize fake login pages, suspicious messages and phishing attempts.</p></div>
+  <div class="feature"><div class="emoji">🛡️</div><h3>Safety Guidance</h3><p>Understand common account risks and safer usage practices.</p></div>
+  <div class="feature"><div class="emoji">📋</div><h3>Recovery Help</h3><p>Find guidance on official Instagram account recovery options.</p></div>
+ </div>
+</section>
+
+<section>
+ <h2>Simple Steps. Safer Account.</h2>
+ <p style="color:#aaa;line-height:1.8;max-width:680px;margin:auto">Enable two-factor authentication, review login activity, keep recovery details updated and never share passwords or OTPs. Use Instagram's official tools for account status and recovery.</p>
+</section>
+
+<section id="reviews">
+ <h2>Community Reviews</h2>
+ <p style="color:#aaa;margin:-10px 0 25px">Reviews from visitors are shown after admin approval.</p>
+ <div id="reviewList" class="review-list" style="margin-bottom:30px"><p style="color:#aaa">Loading reviews…</p></div>
+ <div class="panel">
+  <h3>Write Your Review</h3>
+  <label class="fieldlabel" for="reviewName">Your name</label>
+  <input id="reviewName" maxlength="50" placeholder="Enter your name">
+  <div class="fieldlabel">Your rating</div>
+  <div class="stars" id="stars">
+   <span class="star active" data-value="5">★</span><span class="star" data-value="4">★</span><span class="star" data-value="3">★</span><span class="star" data-value="2">★</span><span class="star" data-value="1">★</span>
+  </div>
+  <label class="fieldlabel" for="reviewMessage">Your review</label>
+  <textarea id="reviewMessage" rows="4" maxlength="500" placeholder="Share your honest experience…"></textarea>
+  <button class="full" id="reviewBtn" onclick="submitReview()">Submit Review</button>
+  <p id="reviewStatus" class="notice"></p>
+ </div>
+</section>
+
+<footer>
+ © 2026 InstaRaksha. Independent account-safety guidance service.<br>
+ Not affiliated with, endorsed by, or operated by Instagram or Meta.
+</footer>
+
+<script>
+const API = "http://127.0.0.1:8000";
+const $ = id => document.getElementById(id);
+const escapeHtml = value => String(value).replace(/[&<>"']/g, c => ({
+ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+}[c]));
+
+async function checkProfile(){
+ const btn=$("checkBtn"), result=$("result");
+ const url=$("profile").value.trim();
+ if(!url){alert("Please enter your Instagram profile link.");return;}
+ const answers={
+  two_factor:$("two_factor").checked,
+  unique_password:$("unique_password").checked,
+  email_phone:$("email_phone").checked,
+  login_activity:$("login_activity").checked,
+  third_party_apps:$("third_party_apps").checked
+ };
+ btn.disabled=true;btn.textContent="Preparing report…";result.style.display="block";result.textContent="Please wait…";
+ try{
+  const response=await fetch(API+"/api/check",{
+   method:"POST",headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({profile_url:url,answers:answers})
+  });
+  const data=await response.json();
+  if(!response.ok)throw new Error(data.detail||"Something went wrong.");
+  result.innerHTML=`
+   <strong style="color:#65e6a1">✓ Self-assessment complete</strong>
+   <p>Profile: @${escapeHtml(data.username)}</p>
+   <div class="score-row"><div class="score">${data.score}%</div><div style="flex:1"><b>Security habits score</b><div class="meter"><div style="width:${data.score}%"></div></div><small style="color:#aaa">Based only on your five answers</small></div></div>
+   <p>${escapeHtml(data.notice)}</p>
+   <strong>Recommended safety steps:</strong>
+   <ul>${data.tips.map(t=>"<li>"+escapeHtml(t)+"</li>").join("")}</ul>`;
+ }catch(error){
+  result.innerHTML=`<span style="color:#ff8585">${escapeHtml(error.message)}</span>`;
+ }finally{btn.disabled=false;btn.textContent="Generate My Safety Report →";}
+}
+
+let selectedRating=5;
+document.querySelectorAll(".star").forEach(star=>{
+ star.addEventListener("click",()=>{
+  selectedRating=Number(star.dataset.value);
+  document.querySelectorAll(".star").forEach(item=>{
+   item.classList.toggle("active",Number(item.dataset.value)<=selectedRating);
+  });
+ });
+});
+
+async function submitReview(){
+ const btn=$("reviewBtn"),status=$("reviewStatus");
+ const name=$("reviewName").value.trim(),message=$("reviewMessage").value.trim();
+ if(name.length<2||message.length<5){status.textContent="Please enter your name and a review of at least 5 characters.";return;}
+ btn.disabled=true;status.textContent="Submitting…";
+ try{
+  const response=await fetch(API+"/api/reviews",{
+   method:"POST",headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({name:name,rating:selectedRating,message:message})
+  });
+  const data=await response.json();
+  if(!response.ok)throw new Error(data.detail||"Could not submit review.");
+  status.textContent=data.message;
+  $("reviewName").value="";$("reviewMessage").value="";
+ }catch(error){status.textContent=error.message;}
+ finally{btn.disabled=false;}
+}
+
+async function loadReviews(){
+ const box=$("reviewList");
+ try{
+  const response=await fetch(API+"/api/reviews");
+  const data=await response.json();
+  if(!response.ok)throw new Error("Reviews unavailable");
+  if(!data.reviews.length){box.innerHTML='<p style="color:#aaa">No approved reviews yet. You can submit the first review.</p>';return;}
+  box.innerHTML=data.reviews.map(review=>`
+   <article class="review-card">
+    <div class="review-head"><b>${escapeHtml(review.name)}</b><span class="review-stars">${"★".repeat(review.rating)}${"☆".repeat(5-review.rating)}</span></div>
+    <p style="margin-top:12px">${escapeHtml(review.message)}</p>
+   </article>`).join("");
+ }catch(error){box.innerHTML='<p style="color:#aaa">Reviews are temporarily unavailable.</p>';}
+}
+loadReviews();
+</script>
+</body>
+</html>

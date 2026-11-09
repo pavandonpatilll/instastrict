@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>InstaRaksha Admin</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0b0d18;color:white;font-family:Arial;padding:25px}
+.container{max-width:1100px;margin:auto}h1{color:#ff78bb}
+.card{background:#191b2c;border:1px solid #343449;padding:22px;border-radius:15px;margin:20px 0}
+input{width:100%;padding:14px;background:#101221;color:white;border:1px solid #444;border-radius:8px;margin:10px 0}
+button{padding:11px 16px;background:#a33bdf;color:white;border:0;border-radius:8px;cursor:pointer;font-weight:bold;margin:3px}
+button.danger{background:#a83252}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+.stat{background:#101221;padding:17px;border-radius:12px}.number{font-size:30px;font-weight:bold;color:#ff78bb}
+table{width:100%;border-collapse:collapse;margin-top:20px;min-width:650px}
+th,td{padding:13px;border-bottom:1px solid #353549;text-align:left;font-size:13px;vertical-align:top}
+a{color:#e8a5ff;overflow-wrap:anywhere}.tablewrap{overflow-x:auto}small,.muted{color:#aaa}
+.pending{color:#ffc45b}.approved{color:#70e0a0}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>🛡️ InstaRaksha Admin</h1>
+<p class="muted">Website management dashboard</p>
+
+<div class="card">
+ <h3>Admin Login</h3>
+ <input type="password" id="key" placeholder="Enter admin key">
+ <button onclick="loadDashboard()">Login / Refresh</button>
+ <p id="status" class="muted"></p>
+</div>
+
+<div class="card">
+ <div class="stats">
+  <div class="stat">Total profile checks<div class="number" id="totalChecks">--</div></div>
+  <div class="stat">Total reviews<div class="number" id="totalReviews">--</div></div>
+  <div class="stat">Pending reviews<div class="number" id="pendingReviews">--</div></div>
+ </div>
+</div>
+
+<div class="card">
+ <h3>Submitted Profiles</h3>
+ <div class="tablewrap"><table>
+ <thead><tr><th>ID</th><th>Username</th><th>Self score</th><th>Profile</th><th>Date</th></tr></thead>
+ <tbody id="users"><tr><td colspan="5">Please login first.</td></tr></tbody>
+ </table></div>
+</div>
+
+<div class="card">
+ <h3>Customer Reviews</h3>
+ <small>Only approve genuine and appropriate user-submitted reviews. No dummy reviews are preloaded.</small>
+ <div class="tablewrap"><table>
+ <thead><tr><th>ID</th><th>Name</th><th>Rating</th><th>Review</th><th>Status</th><th>Action</th></tr></thead>
+ <tbody id="reviewRows"><tr><td colspan="6">Please login first.</td></tr></tbody>
+ </table></div>
+</div>
+</div>
+
+<script>
+const API="http://127.0.0.1:8000";
+let adminKey="";
+const safe=value=>String(value).replace(/[&<>"']/g,c=>({
+ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+}[c]));
+
+async function loadDashboard(){
+ adminKey=document.getElementById("key").value;
+ const status=document.getElementById("status");
+ status.textContent="Loading…";
+ try{
+  const response=await fetch(API+"/api/admin/dashboard",{
+   headers:{"X-Admin-Key":adminKey}
+  });
+  const data=await response.json();
+  if(!response.ok)throw new Error(data.detail||"Login failed.");
+
+  document.getElementById("totalChecks").textContent=data.total_checks;
+  document.getElementById("totalReviews").textContent=data.total_reviews;
+  document.getElementById("pendingReviews").textContent=data.pending_reviews;
+
+  document.getElementById("users").innerHTML=data.checks.length
+   ?data.checks.map(user=>`<tr>
+      <td>${user.id}</td><td>@${safe(user.username)}</td><td>${user.score}%</td>
+      <td><a href="${safe(user.profile_url)}" target="_blank" rel="noopener noreferrer">Open profile</a></td>
+      <td>${safe(new Date(user.created_at).toLocaleString())}</td>
+     </tr>`).join("")
+   :'<tr><td colspan="5">No profiles submitted yet.</td></tr>';
+
+  document.getElementById("reviewRows").innerHTML=data.reviews.length
+   ?data.reviews.map(review=>`<tr>
+      <td>${review.id}</td><td>${safe(review.name)}</td>
+      <td>${"★".repeat(review.rating)}</td><td>${safe(review.message)}</td>
+      <td class="${review.approved?"approved":"pending"}">${review.approved?"Approved":"Pending"}</td>
+      <td>${review.approved?"—":`<button onclick="moderateReview(${review.id},'approve')">Approve</button><button class="danger" onclick="moderateReview(${review.id},'reject')">Reject</button>`}</td>
+     </tr>`).join("")
+   :'<tr><td colspan="6">No reviews submitted yet.</td></tr>';
+
+  status.textContent="✓ Admin access successful";
+ }catch(error){status.textContent="Error: "+error.message;}
+}
+
+async function moderateReview(id,action){
+ try{
+  const response=await fetch(`${API}/api/admin/reviews/${id}/${action}`,{
+   method:"POST",headers:{"X-Admin-Key":adminKey}
+  });
+  const data=await response.json();
+  if(!response.ok)throw new Error(data.detail||"Action failed.");
+  await loadDashboard();
+ }catch(error){alert(error.message);}
+}
+</script>
+</body>
+</html>
