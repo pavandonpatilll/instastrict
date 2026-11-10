@@ -544,6 +544,10 @@ def complete_trial(data: TrialCompleteRequest):
         "quantity": 1,
         "customer_notify": False,
         "start_at": first_charge_at,
+        # Authorization must be completed before the scheduled first billing time.
+        # Razorpay's UPI subscription schedule is fixed at creation; UPI subscriptions
+        # cannot be edited later to move the start time after authorization.
+        "expire_by": first_charge_at - 60,
         "notes": {
             "plan_type": "trial_1_then_159",
             "trial_order_id": data.razorpay_order_id,

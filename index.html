@@ -83,7 +83,7 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
 .payment-option button{width:100%}
 .payment-fields{margin-top:18px;display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .payment-fields input{margin:0}
-#paymentStatus{color:#ffb4d7;margin-top:12px;line-height:1.6;font-size:13px}
+#paymentStatus{color:#ffb4d7;margin-top:12px;line-height:1.6;font-size:13px}\n.flow-hidden{display:none!important}
 @media(max-width:600px){.payment-fields{grid-template-columns:1fr}}
 </style>
 </head>
@@ -97,9 +97,9 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
   <a href="#check">Safety Check</a>
   <a href="#reviews">Reviews</a>
   <a href="#about">About Us</a>
-  <a href="#pricing">Pricing</a>
+  <a id="pricingNav" class="flow-hidden" href="#pricing">Pricing</a>
   <a href="#contact">Contact</a>
-  <a href="#pricing" style="color:#ff83c2;font-weight:bold">Get Premium</a>
+  <a id="premiumNav" class="flow-hidden" href="#pricing" style="color:#ff83c2;font-weight:bold">Get Premium</a>
  </nav>
 </header>
 
@@ -108,7 +108,7 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
  <h1>Protect Your <span>Instagram</span><br>Account Smarter</h1>
  <p>Learn safer Instagram habits, review essential security settings and get practical guidance against common online threats.</p>
 
- <div class="panel" id="check">
+ <div class="panel flow-hidden" id="check">
   <label for="profile">Enter your Instagram profile link</label>
   <input id="profile" type="url" placeholder="https://www.instagram.com/username/">
 
@@ -202,7 +202,7 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
 </section>
 
 <!-- PRICING DETAILS -->
-<section id="pricing" class="policy-section">
+<section id="pricing" class="policy-section flow-hidden">
  <h2>Choose Your InstaRaksha Premium Plan</h2>
  <div class="policy-card">
   <p>Try the free safety checklist first. Choose Premium only when you want the paid subscription features. Review the recurring amount and terms carefully before authorizing AutoPay.</p>
@@ -215,7 +215,7 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
    <div class="payment-option">
     <h4>₹1 Start + AutoPay</h4>
     <p><strong>₹1 one-time payment now</strong></p>
-    <p>Then authorize a ₹159/month UPI AutoPay mandate. The first recurring charge is requested for 24 hours after the subscription is created, subject to Razorpay, bank and mandate processing. Monthly renewals follow the mandate.</p>
+    <p>Then authorize a ₹159/month UPI AutoPay mandate. The first recurring charge is scheduled for 24 hours after the subscription is created. Please authorize the mandate before the scheduled start time. Actual debit timing and settlement depend on Razorpay, your bank and mandate processing. Monthly renewals follow the mandate.</p>
     <button id="trialPayBtn" onclick="startTrialPayment()">Continue with ₹1 + AutoPay</button>
    </div>
    <div class="payment-option">
@@ -449,7 +449,7 @@ async function startTrialPayment(){
      const data=await complete.json();
      if(!complete.ok)throw new Error(data.detail||"Could not verify trial payment.");
      $("paymentStatus").textContent="₹1 payment verified. Next, approve the ₹159/month AutoPay mandate in the UPI app.";
-     openSubscriptionCheckout(data.subscription_id,"₹159/month AutoPay after 24 hours");
+     openSubscriptionCheckout(data.subscription_id,"₹159/month AutoPay starting 24 hours after subscription creation");
     }catch(error){
      setPaymentBusy(false,"₹1 payment response needs attention: "+error.message);
     }
@@ -498,21 +498,38 @@ async function connectInstagram(){
  }
 }
 
+function unlockReportAfterInstagram(){
+ $("check").classList.remove("flow-hidden");
+ $("instagramConnect").querySelector("h2").textContent="✓ Instagram Connected";
+ $("instagramConnectBtn").classList.add("flow-hidden");
+ $("check").scrollIntoView({behavior:"smooth",block:"center"});
+}
+
 function showInstagramReturn(){
  const params=new URLSearchParams(window.location.search);
  const result=params.get("instagram");
  if(result==="connected"){
-  $("instagramStatus").textContent="✓ Instagram connected successfully: @"+(params.get("username")||"account")+".";
+  sessionStorage.setItem("instarakshaInstagramConnected","1");
+  $("instagramStatus").textContent="✓ Instagram connected successfully: @"+(params.get("username")||"account")+". Now paste your profile link and generate your report below.";
+  unlockReportAfterInstagram();
   history.replaceState({},document.title,window.location.pathname+window.location.hash);
  }else if(result==="denied"){
   $("instagramStatus").textContent="Instagram authorization was cancelled or denied. You can try again.";
   history.replaceState({},document.title,window.location.pathname+window.location.hash);
+ }else if(sessionStorage.getItem("instarakshaInstagramConnected")==="1"){
+  $("instagramStatus").textContent="✓ Instagram is connected in this browser session. Paste your profile link below to generate your report.";
+  unlockReportAfterInstagram();
  }
 }
 
 async function checkProfile(){
  const btn=$("checkBtn"), result=$("result");
  const url=$("profile").value.trim();
+
+ if(sessionStorage.getItem("instarakshaInstagramConnected")!=="1"){
+  alert("Please connect your Instagram account with Meta first.");
+  return;
+ }
 
  if(!url){
   alert("Please enter your Instagram profile link.");
@@ -556,7 +573,12 @@ async function checkProfile(){
    </div>
    <p>${escapeHtml(data.notice)}</p>
    <strong>Recommended safety steps:</strong>
-   <ul>${data.tips.map(t=>"<li>"+escapeHtml(t)+"</li>").join("")}</ul>`;
+   <ul>${data.tips.map(t=>"<li>"+escapeHtml(t)+"</li>").join("")}</ul>
+   <p style="margin-top:18px;color:#ffb4d7"><strong>Your report is ready.</strong> Choose a Premium plan below to continue.</p>`;
+  $("pricing").classList.remove("flow-hidden");
+  $("pricingNav").classList.remove("flow-hidden");
+  $("premiumNav").classList.remove("flow-hidden");
+  setTimeout(()=>$("pricing").scrollIntoView({behavior:"smooth",block:"start"}),250);
 
  }catch(error){
   result.innerHTML=`<span style="color:#ff8585">${escapeHtml(error.message)}</span>`;
