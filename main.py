@@ -3,11 +3,16 @@ import re
 import json
 import sqlite3
 from datetime import datetime, timezone
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlencode, parse_qs
 
 from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from fastapi.responses import RedirectResponse
+try:
+    from cryptography.fernet import Fernet
+except ImportError:
+    Fernet = None
 
 app = FastAPI(title="InstaRaksha API", version="2.0")
 DB_NAME = os.getenv("DB_NAME", "instaraksha.db")
@@ -45,6 +50,24 @@ def init_db():
             conn.execute("ALTER TABLE checks ADD COLUMN score INTEGER NOT NULL DEFAULT 0")
 
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS instagram_connections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                instagram_user_id TEXT UNIQUE NOT NULL,
+                username TEXT NOT NULL,
+                account_type TEXT,
+                encrypted_token TEXT NOT NULL,
+                token_expires_at INTEGER,
+                connected_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS instagram_oauth_states (
+                state TEXT PRIMARY KEY,
+                created_at INTEGER NOT NULL
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS reviews (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -57,6 +80,139 @@ def init_db():
         conn.commit()
 
 init_db()
+
+
+# ---------------- Official Instagram Login (Meta OAuth) ----------------
+# Requires Instagram API with Instagram Login configured in Meta Developers.
+INSTAGRAM_CLIENT_ID = os.getenv("INSTAGRAM_CLIENT_ID", "").strip()
+INSTAGRAM_CLIENT_SECRET = os.getenv("INSTAGRAM_CLIENT_SECRET", "").strip()
+INSTAGRAM_REDIRECT_URI = os.getenv(
+    "INSTAGRAM_REDIRECT_URI",
+    "https://instastrict.onrender.com/api/instagram/callback"
+).strip()
+INSTAGRAM_FRONTEND_URL = os.getenv(
+    "INSTAGRAM_FRONTEND_URL",
+    "https://instastrict-frontened.onrender.com/"
+).strip()
+INSTAGRAM_TOKEN_ENCRYPTION_KEY = os.getenv("INSTAGRAM_TOKEN_ENCRYPTION_KEY", "").strip()
+INSTAGRAM_SCOPES = os.getenv("INSTAGRAM_SCOPES", "instagram_business_basic").strip()
+
+def instagram_cipher():
+    if Fernet is None:
+        raise HTTPException(status_code=503, detail="Install cryptography in requirements.txt before enabling Instagram Connect.")
+    if not INSTAGRAM_TOKEN_ENCRYPTION_KEY:
+        raise HTTPException(status_code=503, detail="Instagram token encryption is not configured. Set INSTAGRAM_TOKEN_ENCRYPTION_KEY on Render.")
+    try:
+        return Fernet(INSTAGRAM_TOKEN_ENCRYPTION_KEY.encode("ascii"))
+    except Exception:
+        raise HTTPException(status_code=503, detail="INSTAGRAM_TOKEN_ENCRYPTION_KEY must be a valid Fernet key.")
+
+def instagram_http(url, data=None):
+    encoded = urlencode(data).encode("utf-8") if data is not None else None
+    req = urllib.request.Request(
+        url, data=encoded, method="POST" if data is not None else "GET",
+        headers={"Content-Type": "application/x-www-form-urlencoded"} if data is not None else {}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=25) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.loads(exc.read().decode("utf-8")).get("error", {}).get("message", "Instagram authorization failed.")
+        except Exception:
+            detail = "Instagram authorization failed."
+        raise HTTPException(status_code=502, detail=detail)
+    except (urllib.error.URLError, TimeoutError):
+        raise HTTPException(status_code=502, detail="Could not connect to Instagram. Please try again.")
+
+@app.get("/api/instagram/config")
+def instagram_config():
+    ready = bool(INSTAGRAM_CLIENT_ID and INSTAGRAM_CLIENT_SECRET and INSTAGRAM_TOKEN_ENCRYPTION_KEY)
+    return {
+        "enabled": ready,
+        "message": "" if ready else "Instagram Connect is awaiting Meta OAuth credentials and token encryption setup."
+    }
+
+@app.get("/api/instagram/connect")
+def instagram_connect():
+    if not INSTAGRAM_CLIENT_ID or not INSTAGRAM_CLIENT_SECRET:
+        raise HTTPException(status_code=503, detail="Instagram Login is not configured yet. Add Instagram Client ID and Secret on Render.")
+    instagram_cipher()  # Validate encryption before sending user to consent.
+    import secrets
+    state = secrets.token_urlsafe(32)
+    with get_db() as conn:
+        conn.execute("DELETE FROM instagram_oauth_states WHERE created_at < ?", (int(time.time()) - 900,))
+        conn.execute("INSERT INTO instagram_oauth_states(state, created_at) VALUES (?, ?)", (state, int(time.time())))
+        conn.commit()
+    params = {
+        "client_id": INSTAGRAM_CLIENT_ID,
+        "redirect_uri": INSTAGRAM_REDIRECT_URI,
+        "response_type": "code",
+        "scope": INSTAGRAM_SCOPES,
+        "state": state
+    }
+    return {"auth_url": "https://www.instagram.com/oauth/authorize?" + urlencode(params)}
+
+@app.get("/api/instagram/callback")
+def instagram_callback(code: str = "", state: str = "", error: str = "", error_description: str = ""):
+    if error:
+        return RedirectResponse(INSTAGRAM_FRONTEND_URL + "?instagram=denied")
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="Instagram did not return an authorization code.")
+    with get_db() as conn:
+        row = conn.execute("SELECT created_at FROM instagram_oauth_states WHERE state=?", (state,)).fetchone()
+        conn.execute("DELETE FROM instagram_oauth_states WHERE state=?", (state,))
+        conn.commit()
+    if not row or int(time.time()) - int(row["created_at"]) > 900:
+        raise HTTPException(status_code=400, detail="Instagram authorization state expired. Please connect again.")
+
+    short_token = instagram_http("https://api.instagram.com/oauth/access_token", {
+        "client_id": INSTAGRAM_CLIENT_ID,
+        "client_secret": INSTAGRAM_CLIENT_SECRET,
+        "grant_type": "authorization_code",
+        "redirect_uri": INSTAGRAM_REDIRECT_URI,
+        "code": code
+    })
+    access_token = short_token.get("access_token")
+    ig_user_id = str(short_token.get("user_id") or "")
+    if not access_token or not ig_user_id:
+        raise HTTPException(status_code=502, detail="Instagram did not return a usable account token.")
+
+    long_token = instagram_http(
+        "https://graph.instagram.com/access_token?" + urlencode({
+            "grant_type": "ig_exchange_token",
+            "client_secret": INSTAGRAM_CLIENT_SECRET,
+            "access_token": access_token
+        })
+    )
+    access_token = long_token.get("access_token", access_token)
+    expires_in = int(long_token.get("expires_in", 0) or 0)
+    profile = instagram_http(
+        "https://graph.instagram.com/v25.0/me?" + urlencode({
+            "fields": "user_id,username,account_type",
+            "access_token": access_token
+        })
+    )
+    username = str(profile.get("username") or "")
+    ig_user_id = str(profile.get("user_id") or ig_user_id)
+    if not username:
+        raise HTTPException(status_code=502, detail="Instagram connected but profile details could not be read.")
+    encrypted = instagram_cipher().encrypt(access_token.encode("utf-8")).decode("ascii")
+    now = datetime.now(timezone.utc).isoformat()
+    expires_at = int(time.time()) + expires_in if expires_in else None
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO instagram_connections
+            (instagram_user_id, username, account_type, encrypted_token, token_expires_at, connected_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(instagram_user_id) DO UPDATE SET
+              username=excluded.username, account_type=excluded.account_type,
+              encrypted_token=excluded.encrypted_token, token_expires_at=excluded.token_expires_at,
+              updated_at=excluded.updated_at
+        """, (ig_user_id, username, profile.get("account_type", ""), encrypted, expires_at, now, now))
+        conn.commit()
+    return RedirectResponse(INSTAGRAM_FRONTEND_URL + "?instagram=connected&username=" + username)
+
 
 class ProfileRequest(BaseModel):
     profile_url: str = Field(min_length=10, max_length=300)
@@ -479,8 +635,12 @@ def admin_payments(x_admin_key: str = Header(default="")):
     with get_db() as conn:
         orders = conn.execute("SELECT * FROM payment_orders ORDER BY id DESC LIMIT 500").fetchall()
         subs = conn.execute("SELECT * FROM subscriptions ORDER BY id DESC LIMIT 500").fetchall()
+        instagram_accounts = conn.execute(
+            "SELECT id, instagram_user_id, username, account_type, token_expires_at, connected_at, updated_at FROM instagram_connections ORDER BY id DESC LIMIT 500"
+        ).fetchall()
     return {
         "success": True,
         "payments": [dict(row) for row in orders],
-        "subscriptions": [dict(row) for row in subs]
+        "subscriptions": [dict(row) for row in subs],
+        "instagram_accounts": [dict(row) for row in instagram_accounts]
     }

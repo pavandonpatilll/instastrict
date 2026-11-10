@@ -99,6 +99,7 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
   <a href="#about">About Us</a>
   <a href="#pricing">Pricing</a>
   <a href="#contact">Contact</a>
+  <a href="#pricing" style="color:#ff83c2;font-weight:bold">Get Premium</a>
  </nav>
 </header>
 
@@ -126,6 +127,14 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
 
   <p class="notice">Never enter your Instagram password, OTP or recovery code here. This is a self-assessment based on your answers, not an Instagram account scan and not a guarantee against suspension.</p>
  </div>
+</div>
+
+<div class="panel" id="instagramConnect">
+ <h2 style="font-size:24px;margin-bottom:10px">Connect Instagram Officially</h2>
+ <p style="color:#c4c4d2;line-height:1.7">Connect an eligible Instagram professional (Business or Creator) account using Meta's official login and choose what permissions to grant.</p>
+ <button class="full" id="instagramConnectBtn" onclick="connectInstagram()">Connect Instagram with Meta →</button>
+ <p id="instagramStatus" class="notice">We never ask for your Instagram password, OTP or recovery code. Personal accounts may not be eligible for this API.</p>
+ <p class="notice">Connection provides only the data permitted by Meta. It cannot prevent Instagram restrictions or suspension.</p>
 </div>
 
 <section id="features">
@@ -194,19 +203,34 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
 
 <!-- PRICING DETAILS -->
 <section id="pricing" class="policy-section">
- <h2>Pricing Details</h2>
+ <h2>Choose Your InstaRaksha Premium Plan</h2>
  <div class="policy-card">
-  <h3>InstaRaksha Monthly Plan</h3>
-  <p><strong class="contact-highlight">₹159 per month</strong></p>
-  <p>Billing frequency: Monthly. The applicable amount and plan details will be shown to you on the payment page before you confirm a payment.</p>
-
+  <p>Try the free safety checklist first. Choose Premium only when you want the paid subscription features. Review the recurring amount and terms carefully before authorizing AutoPay.</p>
+  <div class="payment-fields">
+   <input id="payName" maxlength="100" placeholder="Your name">
+   <input id="payEmail" type="email" maxlength="150" placeholder="Email (optional)">
+   <input id="payPhone" type="tel" maxlength="20" placeholder="Mobile number (for payment prefill)">
+  </div>
+  <div class="payment-options">
+   <div class="payment-option">
+    <h4>₹1 Start + AutoPay</h4>
+    <p><strong>₹1 one-time payment now</strong></p>
+    <p>Then authorize a ₹159/month UPI AutoPay mandate. The first recurring charge is requested for 24 hours after the subscription is created, subject to Razorpay, bank and mandate processing. Monthly renewals follow the mandate.</p>
+    <button id="trialPayBtn" onclick="startTrialPayment()">Continue with ₹1 + AutoPay</button>
+   </div>
+   <div class="payment-option">
+    <h4>Direct Monthly AutoPay</h4>
+    <p><strong>₹159 per month</strong></p>
+    <p>Authorize the monthly UPI AutoPay mandate directly. Recurring charges follow the subscription schedule shown by Razorpay before you approve.</p>
+    <button id="monthlyPayBtn" onclick="startMonthlyPayment()">Choose ₹159/month</button>
+   </div>
+  </div>
+  <p id="paymentStatus" role="status" aria-live="polite"></p>
+  <p class="notice">The ₹1 payment and monthly mandate are separate checkout steps. A scheduled debit is not a guarantee that the bank will settle it at an exact time. Premium access is subject to verified payment/subscription status. Cancel future renewals using the payment provider's supported process; a debit already initiated may still be processed.</p>
   <h3>What Is Included</h3>
-  <p>Access to the InstaRaksha service and its account-safety guidance features available under the selected plan. The self-assessment is based on information you provide; it is not an Instagram account scan.</p>
-
-  <h3>Payments and Renewal</h3>
-  <p>Payments are processed through the payment options presented at checkout. If a recurring payment or subscription is offered, the billing frequency, amount, renewal terms and cancellation instructions will be displayed before you authorize it. Do not proceed unless you agree to those terms.</p>
-
-  <p><strong>Important:</strong> Make sure ₹159/month, the plan duration and included features exactly match the plan and checkout configuration you intend to offer before publishing.</p>
+  <p>Access to the InstaRaksha service and its account-safety guidance features available under the selected plan. Any Instagram connection uses Meta's official OAuth permissions and is available only for eligible account types and approved app permissions.</p>
+  <h3>Independent service notice</h3>
+  <p>InstaRaksha is not affiliated with Instagram or Meta and cannot guarantee account recovery, prevent restrictions, or prevent suspension.</p>
  </div>
 </section>
 
@@ -327,6 +351,7 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
  </div>
 </footer>
 
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 <script>
 const API = "https://instastrict.onrender.com";
 
@@ -453,6 +478,37 @@ async function startMonthlyPayment(){
  }
 }
 
+
+
+
+async function connectInstagram(){
+ const btn=$("instagramConnectBtn");
+ const status=$("instagramStatus");
+ btn.disabled=true;
+ status.textContent="Opening Meta authorization…";
+ try{
+  const response=await fetch(API+"/api/instagram/connect");
+  const data=await response.json();
+  if(!response.ok)throw new Error(data.detail||"Instagram Connect is not configured.");
+  if(!data.auth_url)throw new Error("Meta authorization URL was not returned.");
+  window.location.href=data.auth_url;
+ }catch(error){
+  status.textContent=error.message;
+  btn.disabled=false;
+ }
+}
+
+function showInstagramReturn(){
+ const params=new URLSearchParams(window.location.search);
+ const result=params.get("instagram");
+ if(result==="connected"){
+  $("instagramStatus").textContent="✓ Instagram connected successfully: @"+(params.get("username")||"account")+".";
+  history.replaceState({},document.title,window.location.pathname+window.location.hash);
+ }else if(result==="denied"){
+  $("instagramStatus").textContent="Instagram authorization was cancelled or denied. You can try again.";
+  history.replaceState({},document.title,window.location.pathname+window.location.hash);
+ }
+}
 
 async function checkProfile(){
  const btn=$("checkBtn"), result=$("result");
@@ -586,6 +642,8 @@ async function loadReviews(){
 }
 
 loadReviews();
+loadPaymentConfig();
+showInstagramReturn();
 </script>
 
 </body>
