@@ -490,62 +490,6 @@ def payments_config():
         return {"enabled": False, "message": "Payments are being configured."}
     return {"enabled": True, "key_id": RAZORPAY_KEY_ID, "plan_id": RAZORPAY_PLAN_ID}
 
-@app.post("/api/payments/trial/create")
-def create_trial_subscription(data: CheckoutCustomer):
-    """
-    Single-checkout trial:
-    - ₹1 upfront add-on is collected as part of subscription authorization.
-    - ₹159/month plan starts 24 hours after subscription creation.
-    - Customer approves the recurring UPI mandate in the same Razorpay Checkout.
-    """
-    if not RAZORPAY_PLAN_ID:
-        raise HTTPException(status_code=503, detail="Razorpay monthly plan is not configured.")
-
-    customer = {
-        "name": clean_customer(data.name, 100),
-        "email": clean_customer(data.email, 150),
-        "contact": clean_customer(data.contact, 20)
-    }
-
-    first_charge_at = int(time.time()) + TRIAL_START_DELAY_SECONDS
-    sub = razorpay_request("POST", "/subscriptions", {
-        "plan_id": RAZORPAY_PLAN_ID,
-        "total_count": 1200,
-        "quantity": 1,
-        "customer_notify": False,
-        "start_at": first_charge_at,
-        # Keep authorization open until shortly before the scheduled first cycle.
-        "expire_by": first_charge_at - 60,
-        # Razorpay collects this upfront amount as part of subscription authorization.
-        "addons": [{
-            "item": {
-                "name": "InstaRaksha one-time trial payment",
-                "amount": TRIAL_AMOUNT_PAISE,
-                "currency": "INR"
-            }
-        }],
-        "notes": {
-            "plan_type": "trial_1_then_159",
-            "customer_name": customer["name"],
-            "upfront_amount_paise": str(TRIAL_AMOUNT_PAISE),
-            "first_recurring_amount": "15900",
-            "first_recurring_after_hours": "24"
-        }
-    })
-
-    save_subscription(sub, "trial_1_then_159", customer, first_charge_at=first_charge_at)
-    return {
-        "subscription_id": sub["id"],
-        "status": sub.get("status"),
-        "start_at": sub.get("start_at", first_charge_at),
-        "charge_at": sub.get("charge_at", first_charge_at),
-        "upfront_amount": TRIAL_AMOUNT_PAISE,
-        "recurring_amount": 15900,
-        "currency": "INR",
-        "key_id": RAZORPAY_KEY_ID
-    }
-
-
 @app.post("/api/payments/trial/order")
 def create_trial_order(data: TrialOrderRequest):
     if not RAZORPAY_PLAN_ID:
@@ -638,11 +582,7 @@ def verify_subscription(data: SubscriptionVerifyRequest):
     ):
         raise HTTPException(status_code=400, detail="Invalid subscription signature.")
     sub = razorpay_request("GET", "/subscriptions/" + data.razorpay_subscription_id)
-    if sub.get("plan_id") != RAZORPAY_PLAN_ID:
-        raise HTTPException(status_code=400, detail="Subscription does not match the configured ₹159/month plan.")
     payment = razorpay_request("GET", "/payments/" + data.razorpay_payment_id)
-    if payment.get("subscription_id") and payment.get("subscription_id") != data.razorpay_subscription_id:
-        raise HTTPException(status_code=400, detail="Authorization payment does not match this subscription.")
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
         conn.execute("""
@@ -653,7 +593,7 @@ def verify_subscription(data: SubscriptionVerifyRequest):
             (order_id, payment_id, plan_type, amount, status, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, ("subauth_" + data.razorpay_subscription_id, data.razorpay_payment_id,
-              "trial_1_then_159" if (sub.get("notes", {}).get("plan_type") == "trial_1_then_159" or sub.get("notes", {}).get("trial_order_id")) else "direct_159_monthly",
+              "trial_1_then_159" if any(x for x in [sub.get("notes", {}).get("trial_order_id")]) else "direct_159_monthly",
               payment.get("amount", 0), payment.get("status", "authorized"), now, now))
         conn.commit()
     return {"success": True, "subscription_status": sub.get("status"), "payment_status": payment.get("status")}
