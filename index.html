@@ -83,8 +83,50 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
 .payment-option button{width:100%}
 .payment-fields{margin-top:18px;display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .payment-fields input{margin:0}
-#paymentStatus{color:#ffb4d7;margin-top:12px;line-height:1.6;font-size:13px}\n.flow-hidden{display:none!important}
+#paymentStatus{color:#ffb4d7;margin-top:12px;line-height:1.6;font-size:13px}
+.flow-hidden{display:none!important}
 @media(max-width:600px){.payment-fields{grid-template-columns:1fr}}
+
+/* Mobile-first finishing touches */
+html{scroll-behavior:smooth}
+body{min-width:320px;overflow-x:hidden}
+input,textarea,button{max-width:100%;font-family:inherit}
+button{min-height:48px;touch-action:manipulation}
+input,textarea{min-height:48px}
+.panel,.policy-card,.feature,.review-card,.payment-option{min-width:0}
+.payment-option{display:flex;flex-direction:column;align-items:stretch}
+.payment-option button{margin-top:auto}
+@media(max-width:600px){
+ header{position:relative;padding:16px 4%;gap:12px}
+ .logo{font-size:23px}
+ nav{width:100%;justify-content:center;gap:8px 12px}
+ nav a{font-size:12px;padding:4px 0}
+ .hero{padding:44px 14px 38px}
+ h1{font-size:clamp(34px,10vw,48px);margin:20px 0 12px}
+ .hero p{font-size:14px}
+ .panel{width:100%;max-width:100%;margin:22px auto 0;padding:16px;border-radius:16px}
+ section{padding:44px 5%}
+ section h2{font-size:27px}
+ .features,.review-list{grid-template-columns:1fr;gap:12px}
+ .feature,.review-card{padding:18px}
+ .score-row{align-items:flex-start;gap:10px}
+ .score{font-size:36px}
+ #result{padding:15px;overflow-wrap:anywhere}
+ .payment-options{grid-template-columns:1fr;gap:12px}
+ .payment-option{padding:16px}
+ .payment-option button{width:100%;font-size:15px}
+ .payment-fields{grid-template-columns:1fr}
+ .policy-section{padding:38px 4%}
+ .policy-card{padding:16px}
+ .policy-card p,.policy-card li{overflow-wrap:anywhere}
+ .policy-links{gap:10px}
+ footer{padding:24px 14px}
+}
+@media(min-width:601px) and (max-width:900px){
+ header{padding:18px 4%}
+ .policy-section,section{padding-left:5%;padding-right:5%}
+}
+
 </style>
 </head>
 
@@ -226,7 +268,7 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
    </div>
   </div>
   <p id="paymentStatus" role="status" aria-live="polite"></p>
-  <p class="notice">The ₹1 payment and monthly mandate are separate checkout steps. A scheduled debit is not a guarantee that the bank will settle it at an exact time. Premium access is subject to verified payment/subscription status. Cancel future renewals using the payment provider's supported process; a debit already initiated may still be processed.</p>
+  <p class="notice">For the ₹1 plan, Razorpay receives the ₹1 upfront amount as part of the subscription authorization checkout, while the recurring mandate is ₹159/month. The first ₹159 recurring debit is scheduled 24 hours after subscription creation; it is not guaranteed to settle at an exact minute. Review the Razorpay summary and UPI mandate before approving. For UPI AutoPay, you can revoke the mandate from the Mandates/AutoPay section of your UPI app or through a supported merchant cancellation flow. A debit already initiated may still be processed.</p>
   <h3>What Is Included</h3>
   <p>Access to the InstaRaksha service and its account-safety guidance features available under the selected plan. Any Instagram connection uses Meta's official OAuth permissions and is available only for eligible account types and approved app permissions.</p>
   <h3>Independent service notice</h3>
@@ -421,42 +463,20 @@ function openSubscriptionCheckout(subscriptionId, planTitle){
 }
 async function startTrialPayment(){
  if(paymentBusy)return;
- setPaymentBusy(true,"Creating your ₹1 payment…");
+ setPaymentBusy(true,"Preparing your ₹1 upfront + ₹159/month AutoPay checkout…");
  try{
-  const response=await fetch(API+"/api/payments/trial/order",{
+  const response=await fetch(API+"/api/payments/trial/create",{
    method:"POST",headers:{"Content-Type":"application/json"},
    body:JSON.stringify(customerDetails())
   });
-  const order=await response.json();
-  if(!response.ok)throw new Error(order.detail||"Could not create ₹1 payment.");
-  const customer=customerDetails();
-  const checkout=new Razorpay({
-   key:order.key_id,order_id:order.order_id,amount:order.amount,currency:order.currency,
-   name:"InstaRaksha",description:"₹1 trial payment",
-   prefill:{name:customer.name,email:customer.email,contact:customer.contact},
-   theme:{color:"#c34bd2"},
-   handler:async function(payment){
-    try{
-     $("paymentStatus").textContent="₹1 payment received. Verifying it and preparing your ₹159/month mandate…";
-     const complete=await fetch(API+"/api/payments/trial/complete",{
-      method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({
-       razorpay_order_id:payment.razorpay_order_id,
-       razorpay_payment_id:payment.razorpay_payment_id,
-       razorpay_signature:payment.razorpay_signature
-      })
-     });
-     const data=await complete.json();
-     if(!complete.ok)throw new Error(data.detail||"Could not verify trial payment.");
-     $("paymentStatus").textContent="₹1 payment verified. Next, approve the ₹159/month AutoPay mandate in the UPI app.";
-     openSubscriptionCheckout(data.subscription_id,"₹159/month AutoPay starting 24 hours after subscription creation");
-    }catch(error){
-     setPaymentBusy(false,"₹1 payment response needs attention: "+error.message);
-    }
-   },
-   modal:{ondismiss:function(){setPaymentBusy(false,"Payment window closed. Check your payment status before trying again.");}}
-  });
-  checkout.open();
+  const data=await response.json();
+  if(!response.ok)throw new Error(data.detail||"Could not create the ₹1 + AutoPay subscription.");
+  razorpayKeyId=data.key_id||razorpayKeyId;
+  $("paymentStatus").textContent="Checkout ready: ₹1 upfront now, then ₹159/month starting 24 hours after subscription creation. Review and approve the mandate in Razorpay.";
+  openSubscriptionCheckout(
+   data.subscription_id,
+   "₹1 upfront today + ₹159/month AutoPay starting after 24 hours"
+  );
  }catch(error){
   setPaymentBusy(false,error.message);
  }
@@ -471,6 +491,7 @@ async function startMonthlyPayment(){
   });
   const data=await response.json();
   if(!response.ok)throw new Error(data.detail||"Could not create subscription.");
+  razorpayKeyId=data.key_id||razorpayKeyId;
   setPaymentBusy(false);
   openSubscriptionCheckout(data.subscription_id,"InstaRaksha ₹159 monthly subscription");
  }catch(error){
