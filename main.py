@@ -2,6 +2,9 @@ import os
 import re
 import json
 import sqlite3
+import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from urllib.parse import urlparse, urlencode, parse_qs
 
@@ -227,18 +230,73 @@ def instagram_callback(code: str = "", state: str = "", error: str = "", error_d
 
         expires_in = int(token_data.get("expires_in", 0) or 0)
 
-        # With a System-user access-token configuration, /me is the system user.
-        # Discover the Instagram professional account explicitly shared with this app.
-        assigned = instagram_http(instagram_graph_url(
-            "me/assigned_instagram_accounts",
-            fields="id,username",
-            access_token=access_token
+        # Unified Login returns a Business Integration System User token.
+        # First identify the business attached to this token, then enumerate every
+        # Instagram asset assigned to it. The edge can be paginated; reading only
+        # the first response can otherwise miss the selected account.
+        identity = instagram_http(instagram_graph_url(
+            "me", fields="id,client_business_id", access_token=access_token
         ))
-        accounts = assigned.get("data") or []
+        client_business_id = str(identity.get("client_business_id") or "")
+
+        accounts_by_id = {}
+        after = ""
+        seen_cursors = set()
+        complete = False
+        for _page in range(100):
+            page_params = {
+                "fields": "id,username",
+                "limit": 100,
+                "access_token": access_token,
+            }
+            if after:
+                page_params["after"] = after
+            assigned = instagram_http(instagram_graph_url(
+                "me/assigned_instagram_accounts", **page_params
+            ))
+            page_accounts = assigned.get("data")
+            if not isinstance(page_accounts, list):
+                raise HTTPException(
+                    status_code=502,
+                    detail="Meta returned an unexpected Instagram asset response. Please reconnect and try again."
+                )
+            for item in page_accounts:
+                account_id = str(item.get("id") or "")
+                if account_id:
+                    accounts_by_id[account_id] = item
+            next_cursor = str((assigned.get("paging") or {}).get("cursors", {}).get("after") or "")
+            if not page_accounts or not next_cursor:
+                complete = True
+                break
+            if next_cursor == after or next_cursor in seen_cursors:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Meta returned a repeated pagination cursor while listing Instagram accounts. Please reconnect."
+                )
+            seen_cursors.add(next_cursor)
+            after = next_cursor
+
+        if not complete:
+            raise HTTPException(
+                status_code=502,
+                detail="Meta returned too many Instagram assets to verify safely. Please contact support."
+            )
+
+        accounts = list(accounts_by_id.values())
         if not accounts:
+            business_hint = (
+                f" Meta business ID: {client_business_id}." if client_business_id else ""
+            )
             raise HTTPException(
                 status_code=400,
-                detail="No Instagram account was shared with this app. Check that your Business/Creator account is selected in the Meta business portfolio and try again."
+                detail=(
+                    "Facebook authorization succeeded, but Meta returned zero Instagram accounts "
+                    "for this login configuration. In the Facebook consent screen, select the "
+                    "existing @prem.milan.app Instagram asset (do not create a Page or ad account), "
+                    "then approve and reconnect. If it is already selected, verify the Instagram "
+                    "account is Professional and owned by the same business portfolio, and check "
+                    "that the saved configuration is the one used by this app." + business_hint
+                )
             )
         if len(accounts) > 1:
             raise HTTPException(
@@ -441,9 +499,6 @@ import base64
 import hashlib
 import hmac
 import time
-import urllib.error
-import urllib.request
-
 RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "").strip()
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "").strip()
 RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "").strip()
