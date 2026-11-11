@@ -493,6 +493,9 @@ function showInstagramReturn(){
  }else if(result==="denied"){
   $("instagramStatus").textContent="Instagram authorization was cancelled or denied. You can try again.";
   history.replaceState({},document.title,window.location.pathname+window.location.hash);
+ }else if(result==="error"){
+  $("instagramStatus").textContent="Instagram connection could not be completed: "+(params.get("message")||"Please check your Meta configuration and try again.");
+  history.replaceState({},document.title,window.location.pathname+window.location.hash);
  }else if(sessionStorage.getItem("instarakshaInstagramConnected")==="1"){
   $("instagramStatus").textContent="✓ Instagram is connected in this browser session. Paste your profile link below to generate your report.";
   unlockReportAfterInstagram();

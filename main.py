@@ -82,10 +82,14 @@ def init_db():
 init_db()
 
 
-# ---------------- Official Instagram Login (Meta OAuth) ----------------
-# Requires Instagram API with Instagram Login configured in Meta Developers.
+# ---------------- Instagram API with Meta Unified Login ----------------
+# New Meta apps use Facebook Login for Business with a config_id.
+# The configuration created in Meta controls the requested permissions/assets;
+# do not send a legacy Instagram scope list in this flow.
 INSTAGRAM_CLIENT_ID = os.getenv("INSTAGRAM_CLIENT_ID", "").strip()
 INSTAGRAM_CLIENT_SECRET = os.getenv("INSTAGRAM_CLIENT_SECRET", "").strip()
+INSTAGRAM_CONFIG_ID = os.getenv("INSTAGRAM_CONFIG_ID", "").strip()
+INSTAGRAM_GRAPH_VERSION = os.getenv("INSTAGRAM_GRAPH_VERSION", "v25.0").strip()
 INSTAGRAM_REDIRECT_URI = os.getenv(
     "INSTAGRAM_REDIRECT_URI",
     "https://instastrict.onrender.com/api/instagram/callback"
@@ -95,7 +99,7 @@ INSTAGRAM_FRONTEND_URL = os.getenv(
     "https://instastrict-frontened.onrender.com/"
 ).strip()
 INSTAGRAM_TOKEN_ENCRYPTION_KEY = os.getenv("INSTAGRAM_TOKEN_ENCRYPTION_KEY", "").strip()
-INSTAGRAM_SCOPES = os.getenv("INSTAGRAM_SCOPES", "instagram_business_basic").strip()
+
 
 def instagram_cipher():
     if Fernet is None:
@@ -106,6 +110,7 @@ def instagram_cipher():
         return Fernet(INSTAGRAM_TOKEN_ENCRYPTION_KEY.encode("ascii"))
     except Exception:
         raise HTTPException(status_code=503, detail="INSTAGRAM_TOKEN_ENCRYPTION_KEY must be a valid Fernet key.")
+
 
 def instagram_http(url, data=None):
     encoded = urlencode(data).encode("utf-8") if data is not None else None
@@ -118,100 +123,165 @@ def instagram_http(url, data=None):
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         try:
-            detail = json.loads(exc.read().decode("utf-8")).get("error", {}).get("message", "Instagram authorization failed.")
+            payload = json.loads(exc.read().decode("utf-8"))
+            detail = payload.get("error", {}).get("message", "Meta authorization failed.")
         except Exception:
-            detail = "Instagram authorization failed."
+            detail = "Meta authorization failed."
         raise HTTPException(status_code=502, detail=detail)
     except (urllib.error.URLError, TimeoutError):
-        raise HTTPException(status_code=502, detail="Could not connect to Instagram. Please try again.")
+        raise HTTPException(status_code=502, detail="Could not connect to Meta. Please try again.")
+
+
+def instagram_frontend_redirect(result, **extra):
+    params = {"instagram": result}
+    params.update({key: str(value) for key, value in extra.items() if value is not None})
+    return RedirectResponse(INSTAGRAM_FRONTEND_URL.rstrip("/") + "/?" + urlencode(params))
+
+
+def instagram_graph_url(path, **params):
+    query = urlencode(params)
+    return f"https://graph.facebook.com/{INSTAGRAM_GRAPH_VERSION}/{path}" + (f"?{query}" if query else "")
+
 
 @app.get("/api/instagram/config")
 def instagram_config():
-    ready = bool(INSTAGRAM_CLIENT_ID and INSTAGRAM_CLIENT_SECRET and INSTAGRAM_TOKEN_ENCRYPTION_KEY)
+    ready = bool(
+        INSTAGRAM_CLIENT_ID and INSTAGRAM_CLIENT_SECRET
+        and INSTAGRAM_CONFIG_ID and INSTAGRAM_TOKEN_ENCRYPTION_KEY
+    )
     return {
         "enabled": ready,
-        "message": "" if ready else "Instagram Connect is awaiting Meta OAuth credentials and token encryption setup."
+        "message": "" if ready else "Instagram Unified Login is awaiting App ID, App Secret, Configuration ID and token encryption setup."
     }
+
 
 @app.get("/api/instagram/connect")
 def instagram_connect():
-    if not INSTAGRAM_CLIENT_ID or not INSTAGRAM_CLIENT_SECRET:
-        raise HTTPException(status_code=503, detail="Instagram Login is not configured yet. Add Instagram Client ID and Secret on Render.")
-    instagram_cipher()  # Validate encryption before sending user to consent.
+    if not INSTAGRAM_CLIENT_ID or not INSTAGRAM_CLIENT_SECRET or not INSTAGRAM_CONFIG_ID:
+        raise HTTPException(
+            status_code=503,
+            detail="Instagram Unified Login is not configured. Add INSTAGRAM_CLIENT_ID, INSTAGRAM_CLIENT_SECRET and INSTAGRAM_CONFIG_ID on Render."
+        )
+    instagram_cipher()  # Validate encryption before sending the visitor to Meta consent.
     import secrets
     state = secrets.token_urlsafe(32)
     with get_db() as conn:
-        conn.execute("DELETE FROM instagram_oauth_states WHERE created_at < ?", (int(time.time()) - 900,))
-        conn.execute("INSERT INTO instagram_oauth_states(state, created_at) VALUES (?, ?)", (state, int(time.time())))
+        conn.execute(
+            "DELETE FROM instagram_oauth_states WHERE created_at < ?",
+            (int(time.time()) - 900,)
+        )
+        conn.execute(
+            "INSERT INTO instagram_oauth_states(state, created_at) VALUES (?, ?)",
+            (state, int(time.time()))
+        )
         conn.commit()
+
+    # Match the URL generated by Meta's Unified Login configuration.
     params = {
         "client_id": INSTAGRAM_CLIENT_ID,
+        "config_id": INSTAGRAM_CONFIG_ID,
+        "display": "popup",
+        "override_default_response_type": "true",
         "redirect_uri": INSTAGRAM_REDIRECT_URI,
         "response_type": "code",
-        "scope": INSTAGRAM_SCOPES,
-        "state": state
+        "state": state,
+        "prompt": "login"
     }
-    return {"auth_url": "https://www.instagram.com/oauth/authorize?" + urlencode(params)}
+    return {"auth_url": "https://www.facebook.com/dialog/oauth?" + urlencode(params)}
+
 
 @app.get("/api/instagram/callback")
 def instagram_callback(code: str = "", state: str = "", error: str = "", error_description: str = ""):
     if error:
-        return RedirectResponse(INSTAGRAM_FRONTEND_URL + "?instagram=denied")
+        return instagram_frontend_redirect(
+            "denied",
+            message=(error_description or error or "Meta authorization was cancelled.")[:240]
+        )
     if not code or not state:
-        raise HTTPException(status_code=400, detail="Instagram did not return an authorization code.")
+        raise HTTPException(status_code=400, detail="Meta did not return an authorization code.")
+
     with get_db() as conn:
-        row = conn.execute("SELECT created_at FROM instagram_oauth_states WHERE state=?", (state,)).fetchone()
+        row = conn.execute(
+            "SELECT created_at FROM instagram_oauth_states WHERE state=?",
+            (state,)
+        ).fetchone()
         conn.execute("DELETE FROM instagram_oauth_states WHERE state=?", (state,))
         conn.commit()
+
     if not row or int(time.time()) - int(row["created_at"]) > 900:
-        raise HTTPException(status_code=400, detail="Instagram authorization state expired. Please connect again.")
+        raise HTTPException(status_code=400, detail="Meta authorization state expired. Please connect again.")
 
-    short_token = instagram_http("https://api.instagram.com/oauth/access_token", {
-        "client_id": INSTAGRAM_CLIENT_ID,
-        "client_secret": INSTAGRAM_CLIENT_SECRET,
-        "grant_type": "authorization_code",
-        "redirect_uri": INSTAGRAM_REDIRECT_URI,
-        "code": code
-    })
-    access_token = short_token.get("access_token")
-    ig_user_id = str(short_token.get("user_id") or "")
-    if not access_token or not ig_user_id:
-        raise HTTPException(status_code=502, detail="Instagram did not return a usable account token.")
+    try:
+        # Unified Login exchanges the code through the Facebook Graph OAuth endpoint.
+        token_data = instagram_http(
+            instagram_graph_url("oauth/access_token",
+                client_id=INSTAGRAM_CLIENT_ID,
+                client_secret=INSTAGRAM_CLIENT_SECRET,
+                redirect_uri=INSTAGRAM_REDIRECT_URI,
+                code=code
+            )
+        )
+        access_token = str(token_data.get("access_token") or "")
+        if not access_token:
+            raise HTTPException(status_code=502, detail="Meta did not return an access token.")
 
-    long_token = instagram_http(
-        "https://graph.instagram.com/access_token?" + urlencode({
-            "grant_type": "ig_exchange_token",
-            "client_secret": INSTAGRAM_CLIENT_SECRET,
-            "access_token": access_token
-        })
-    )
-    access_token = long_token.get("access_token", access_token)
-    expires_in = int(long_token.get("expires_in", 0) or 0)
-    profile = instagram_http(
-        "https://graph.instagram.com/v25.0/me?" + urlencode({
-            "fields": "user_id,username,account_type",
-            "access_token": access_token
-        })
-    )
-    username = str(profile.get("username") or "")
-    ig_user_id = str(profile.get("user_id") or ig_user_id)
-    if not username:
-        raise HTTPException(status_code=502, detail="Instagram connected but profile details could not be read.")
-    encrypted = instagram_cipher().encrypt(access_token.encode("utf-8")).decode("ascii")
-    now = datetime.now(timezone.utc).isoformat()
-    expires_at = int(time.time()) + expires_in if expires_in else None
-    with get_db() as conn:
-        conn.execute("""
-            INSERT INTO instagram_connections
-            (instagram_user_id, username, account_type, encrypted_token, token_expires_at, connected_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(instagram_user_id) DO UPDATE SET
-              username=excluded.username, account_type=excluded.account_type,
-              encrypted_token=excluded.encrypted_token, token_expires_at=excluded.token_expires_at,
-              updated_at=excluded.updated_at
-        """, (ig_user_id, username, profile.get("account_type", ""), encrypted, expires_at, now, now))
-        conn.commit()
-    return RedirectResponse(INSTAGRAM_FRONTEND_URL + "?instagram=connected&username=" + username)
+        expires_in = int(token_data.get("expires_in", 0) or 0)
+
+        # With a System-user access-token configuration, /me is the system user.
+        # Discover the Instagram professional account explicitly shared with this app.
+        assigned = instagram_http(instagram_graph_url(
+            "me/assigned_instagram_accounts",
+            fields="id,username",
+            access_token=access_token
+        ))
+        accounts = assigned.get("data") or []
+        if not accounts:
+            raise HTTPException(
+                status_code=400,
+                detail="No Instagram account was shared with this app. Check that your Business/Creator account is selected in the Meta business portfolio and try again."
+            )
+        if len(accounts) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail="More than one Instagram account is shared. Keep only the intended Instagram account selected in the Meta configuration, then reconnect."
+            )
+
+        ig_account = accounts[0]
+        ig_user_id = str(ig_account.get("id") or "")
+        username = str(ig_account.get("username") or "")
+        if not ig_user_id:
+            raise HTTPException(status_code=502, detail="Meta did not return an Instagram account ID.")
+
+        # Confirm the selected account profile using the Unified Login Graph API.
+        profile = instagram_http(instagram_graph_url(
+            ig_user_id,
+            fields="id,username",
+            access_token=access_token
+        ))
+        username = str(profile.get("username") or username)
+        ig_user_id = str(profile.get("id") or ig_user_id)
+        if not username:
+            raise HTTPException(status_code=502, detail="Instagram was authorized, but Meta did not return the account username.")
+
+        encrypted = instagram_cipher().encrypt(access_token.encode("utf-8")).decode("ascii")
+        now = datetime.now(timezone.utc).isoformat()
+        expires_at = int(time.time()) + expires_in if expires_in > 0 else None
+        with get_db() as conn:
+            conn.execute("""
+                INSERT INTO instagram_connections
+                (instagram_user_id, username, account_type, encrypted_token, token_expires_at, connected_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(instagram_user_id) DO UPDATE SET
+                  username=excluded.username, account_type=excluded.account_type,
+                  encrypted_token=excluded.encrypted_token, token_expires_at=excluded.token_expires_at,
+                  updated_at=excluded.updated_at
+            """, (ig_user_id, username, "Professional", encrypted, expires_at, now, now))
+            conn.commit()
+
+        return instagram_frontend_redirect("connected", username=username)
+
+    except HTTPException as exc:
+        return instagram_frontend_redirect("error", message=str(exc.detail)[:240])
 
 
 class ProfileRequest(BaseModel):
