@@ -6,16 +6,11 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
-from urllib.parse import urlparse, urlencode, parse_qs
+from urllib.parse import urlparse, urlencode
 
 from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from fastapi.responses import RedirectResponse
-try:
-    from cryptography.fernet import Fernet
-except ImportError:
-    Fernet = None
 
 app = FastAPI(title="InstaRaksha API", version="2.0")
 DB_NAME = os.getenv("DB_NAME", "instaraksha.db")
@@ -53,24 +48,6 @@ def init_db():
             conn.execute("ALTER TABLE checks ADD COLUMN score INTEGER NOT NULL DEFAULT 0")
 
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS instagram_connections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                instagram_user_id TEXT UNIQUE NOT NULL,
-                username TEXT NOT NULL,
-                account_type TEXT,
-                encrypted_token TEXT NOT NULL,
-                token_expires_at INTEGER,
-                connected_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS instagram_oauth_states (
-                state TEXT PRIMARY KEY,
-                created_at INTEGER NOT NULL
-            )
-        """)
-        conn.execute("""
             CREATE TABLE IF NOT EXISTS reviews (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -83,263 +60,6 @@ def init_db():
         conn.commit()
 
 init_db()
-
-
-# ---------------- Instagram API with Meta Unified Login ----------------
-# New Meta apps use Facebook Login for Business with a config_id.
-# The configuration created in Meta controls the requested permissions/assets;
-# do not send a legacy Instagram scope list in this flow.
-INSTAGRAM_CLIENT_ID = os.getenv("INSTAGRAM_CLIENT_ID", "").strip()
-INSTAGRAM_CLIENT_SECRET = os.getenv("INSTAGRAM_CLIENT_SECRET", "").strip()
-INSTAGRAM_CONFIG_ID = os.getenv("INSTAGRAM_CONFIG_ID", "").strip()
-INSTAGRAM_GRAPH_VERSION = os.getenv("INSTAGRAM_GRAPH_VERSION", "v25.0").strip()
-INSTAGRAM_REDIRECT_URI = os.getenv(
-    "INSTAGRAM_REDIRECT_URI",
-    "https://instastrict.onrender.com/api/instagram/callback"
-).strip()
-INSTAGRAM_FRONTEND_URL = os.getenv(
-    "INSTAGRAM_FRONTEND_URL",
-    "https://instastrict-frontened.onrender.com/"
-).strip()
-INSTAGRAM_TOKEN_ENCRYPTION_KEY = os.getenv("INSTAGRAM_TOKEN_ENCRYPTION_KEY", "").strip()
-
-
-def instagram_cipher():
-    if Fernet is None:
-        raise HTTPException(status_code=503, detail="Install cryptography in requirements.txt before enabling Instagram Connect.")
-    if not INSTAGRAM_TOKEN_ENCRYPTION_KEY:
-        raise HTTPException(status_code=503, detail="Instagram token encryption is not configured. Set INSTAGRAM_TOKEN_ENCRYPTION_KEY on Render.")
-    try:
-        return Fernet(INSTAGRAM_TOKEN_ENCRYPTION_KEY.encode("ascii"))
-    except Exception:
-        raise HTTPException(status_code=503, detail="INSTAGRAM_TOKEN_ENCRYPTION_KEY must be a valid Fernet key.")
-
-
-def instagram_http(url, data=None):
-    encoded = urlencode(data).encode("utf-8") if data is not None else None
-    req = urllib.request.Request(
-        url, data=encoded, method="POST" if data is not None else "GET",
-        headers={"Content-Type": "application/x-www-form-urlencoded"} if data is not None else {}
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=25) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        try:
-            payload = json.loads(exc.read().decode("utf-8"))
-            detail = payload.get("error", {}).get("message", "Meta authorization failed.")
-        except Exception:
-            detail = "Meta authorization failed."
-        raise HTTPException(status_code=502, detail=detail)
-    except (urllib.error.URLError, TimeoutError):
-        raise HTTPException(status_code=502, detail="Could not connect to Meta. Please try again.")
-
-
-def instagram_frontend_redirect(result, **extra):
-    params = {"instagram": result}
-    params.update({key: str(value) for key, value in extra.items() if value is not None})
-    return RedirectResponse(INSTAGRAM_FRONTEND_URL.rstrip("/") + "/?" + urlencode(params))
-
-
-def instagram_graph_url(path, **params):
-    query = urlencode(params)
-    return f"https://graph.facebook.com/{INSTAGRAM_GRAPH_VERSION}/{path}" + (f"?{query}" if query else "")
-
-
-@app.get("/api/instagram/config")
-def instagram_config():
-    ready = bool(
-        INSTAGRAM_CLIENT_ID and INSTAGRAM_CLIENT_SECRET
-        and INSTAGRAM_CONFIG_ID and INSTAGRAM_TOKEN_ENCRYPTION_KEY
-    )
-    return {
-        "enabled": ready,
-        "message": "" if ready else "Instagram Unified Login is awaiting App ID, App Secret, Configuration ID and token encryption setup."
-    }
-
-
-@app.get("/api/instagram/connect")
-def instagram_connect():
-    if not INSTAGRAM_CLIENT_ID or not INSTAGRAM_CLIENT_SECRET or not INSTAGRAM_CONFIG_ID:
-        raise HTTPException(
-            status_code=503,
-            detail="Instagram Unified Login is not configured. Add INSTAGRAM_CLIENT_ID, INSTAGRAM_CLIENT_SECRET and INSTAGRAM_CONFIG_ID on Render."
-        )
-    instagram_cipher()  # Validate encryption before sending the visitor to Meta consent.
-    import secrets
-    state = secrets.token_urlsafe(32)
-    with get_db() as conn:
-        conn.execute(
-            "DELETE FROM instagram_oauth_states WHERE created_at < ?",
-            (int(time.time()) - 900,)
-        )
-        conn.execute(
-            "INSERT INTO instagram_oauth_states(state, created_at) VALUES (?, ?)",
-            (state, int(time.time()))
-        )
-        conn.commit()
-
-    # Match the URL generated by Meta's Unified Login configuration.
-    params = {
-        "client_id": INSTAGRAM_CLIENT_ID,
-        "config_id": INSTAGRAM_CONFIG_ID,
-        "display": "popup",
-        "override_default_response_type": "true",
-        "redirect_uri": INSTAGRAM_REDIRECT_URI,
-        "response_type": "code",
-        "state": state,
-        "prompt": "login"
-    }
-    return {"auth_url": "https://www.facebook.com/dialog/oauth?" + urlencode(params)}
-
-
-@app.get("/api/instagram/callback")
-def instagram_callback(code: str = "", state: str = "", error: str = "", error_description: str = ""):
-    if error:
-        return instagram_frontend_redirect(
-            "denied",
-            message=(error_description or error or "Meta authorization was cancelled.")[:240]
-        )
-    if not code or not state:
-        raise HTTPException(status_code=400, detail="Meta did not return an authorization code.")
-
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT created_at FROM instagram_oauth_states WHERE state=?",
-            (state,)
-        ).fetchone()
-        conn.execute("DELETE FROM instagram_oauth_states WHERE state=?", (state,))
-        conn.commit()
-
-    if not row or int(time.time()) - int(row["created_at"]) > 900:
-        raise HTTPException(status_code=400, detail="Meta authorization state expired. Please connect again.")
-
-    try:
-        # Unified Login exchanges the code through the Facebook Graph OAuth endpoint.
-        token_data = instagram_http(
-            instagram_graph_url("oauth/access_token",
-                client_id=INSTAGRAM_CLIENT_ID,
-                client_secret=INSTAGRAM_CLIENT_SECRET,
-                redirect_uri=INSTAGRAM_REDIRECT_URI,
-                code=code
-            )
-        )
-        access_token = str(token_data.get("access_token") or "")
-        if not access_token:
-            raise HTTPException(status_code=502, detail="Meta did not return an access token.")
-
-        expires_in = int(token_data.get("expires_in", 0) or 0)
-
-        # Unified Login returns a Business Integration System User token.
-        # First identify the business attached to this token, then enumerate every
-        # Instagram asset assigned to it. The edge can be paginated; reading only
-        # the first response can otherwise miss the selected account.
-        identity = instagram_http(instagram_graph_url(
-            "me", fields="id,client_business_id", access_token=access_token
-        ))
-        client_business_id = str(identity.get("client_business_id") or "")
-
-        accounts_by_id = {}
-        after = ""
-        seen_cursors = set()
-        complete = False
-        for _page in range(100):
-            page_params = {
-                "fields": "id,username",
-                "limit": 100,
-                "access_token": access_token,
-            }
-            if after:
-                page_params["after"] = after
-            assigned = instagram_http(instagram_graph_url(
-                "me/assigned_instagram_accounts", **page_params
-            ))
-            page_accounts = assigned.get("data")
-            if not isinstance(page_accounts, list):
-                raise HTTPException(
-                    status_code=502,
-                    detail="Meta returned an unexpected Instagram asset response. Please reconnect and try again."
-                )
-            for item in page_accounts:
-                account_id = str(item.get("id") or "")
-                if account_id:
-                    accounts_by_id[account_id] = item
-            next_cursor = str((assigned.get("paging") or {}).get("cursors", {}).get("after") or "")
-            if not page_accounts or not next_cursor:
-                complete = True
-                break
-            if next_cursor == after or next_cursor in seen_cursors:
-                raise HTTPException(
-                    status_code=502,
-                    detail="Meta returned a repeated pagination cursor while listing Instagram accounts. Please reconnect."
-                )
-            seen_cursors.add(next_cursor)
-            after = next_cursor
-
-        if not complete:
-            raise HTTPException(
-                status_code=502,
-                detail="Meta returned too many Instagram assets to verify safely. Please contact support."
-            )
-
-        accounts = list(accounts_by_id.values())
-        if not accounts:
-            business_hint = (
-                f" Meta business ID: {client_business_id}." if client_business_id else ""
-            )
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Facebook authorization succeeded, but Meta returned zero Instagram accounts "
-                    "for this login configuration. In the Facebook consent screen, select the "
-                    "existing @prem.milan.app Instagram asset (do not create a Page or ad account), "
-                    "then approve and reconnect. If it is already selected, verify the Instagram "
-                    "account is Professional and owned by the same business portfolio, and check "
-                    "that the saved configuration is the one used by this app." + business_hint
-                )
-            )
-        if len(accounts) > 1:
-            raise HTTPException(
-                status_code=400,
-                detail="More than one Instagram account is shared. Keep only the intended Instagram account selected in the Meta configuration, then reconnect."
-            )
-
-        ig_account = accounts[0]
-        ig_user_id = str(ig_account.get("id") or "")
-        username = str(ig_account.get("username") or "")
-        if not ig_user_id:
-            raise HTTPException(status_code=502, detail="Meta did not return an Instagram account ID.")
-
-        # Confirm the selected account profile using the Unified Login Graph API.
-        profile = instagram_http(instagram_graph_url(
-            ig_user_id,
-            fields="id,username",
-            access_token=access_token
-        ))
-        username = str(profile.get("username") or username)
-        ig_user_id = str(profile.get("id") or ig_user_id)
-        if not username:
-            raise HTTPException(status_code=502, detail="Instagram was authorized, but Meta did not return the account username.")
-
-        encrypted = instagram_cipher().encrypt(access_token.encode("utf-8")).decode("ascii")
-        now = datetime.now(timezone.utc).isoformat()
-        expires_at = int(time.time()) + expires_in if expires_in > 0 else None
-        with get_db() as conn:
-            conn.execute("""
-                INSERT INTO instagram_connections
-                (instagram_user_id, username, account_type, encrypted_token, token_expires_at, connected_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(instagram_user_id) DO UPDATE SET
-                  username=excluded.username, account_type=excluded.account_type,
-                  encrypted_token=excluded.encrypted_token, token_expires_at=excluded.token_expires_at,
-                  updated_at=excluded.updated_at
-            """, (ig_user_id, username, "Professional", encrypted, expires_at, now, now))
-            conn.commit()
-
-        return instagram_frontend_redirect("connected", username=username)
-
-    except HTTPException as exc:
-        return instagram_frontend_redirect("error", message=str(exc.detail)[:240])
 
 
 class ProfileRequest(BaseModel):
@@ -396,11 +116,13 @@ def submit_profile(data: ProfileRequest):
         record_id = cursor.lastrowid
 
     tips = [
-        "Turn on two-factor authentication in Instagram.",
-        "Use a unique password and never share it.",
-        "Keep your recovery email and phone number current.",
-        "Review login activity and log out unknown sessions.",
-        "Remove apps or websites you no longer trust."
+        "Turn on two-factor authentication in Instagram and keep recovery details current.",
+        "Use a unique password, never share OTPs, and review login activity for unknown sessions.",
+        "Avoid follower, like, comment or automation apps that ask for your Instagram login.",
+        "Avoid repetitive high-volume actions such as rapid follow/unfollow, likes or comments.",
+        "Follow Instagram's Community Guidelines and respect copyright; remove content that violates them.",
+        "Review Account Status inside Instagram and use the in-app appeal/review option if Instagram flags content or activity.",
+        "Remove unknown third-party apps and websites that have access to your account."
     ]
     return {
         "success": True,
@@ -409,7 +131,7 @@ def submit_profile(data: ProfileRequest):
         "profile_url": profile_url,
         "score": score,
         "score_label": "Security habits self-assessment",
-        "notice": "This percentage is calculated only from your answers. We did not access or scan your Instagram account. It cannot predict or prevent suspension.",
+        "notice": "This self-assessment uses only your profile link and checklist answers. We did not access or scan your Instagram account. It cannot predict or prevent suspension.",
         "answers": answers,
         "tips": tips
     }
@@ -567,6 +289,24 @@ def razorpay_request(method: str, path: str, payload=None):
     except (urllib.error.URLError, TimeoutError):
         raise HTTPException(status_code=502, detail="Could not connect to Razorpay. Please try again.")
 
+def verify_159_monthly_plan():
+    """Fail closed unless the configured Razorpay plan is exactly INR 159/month."""
+    if not RAZORPAY_PLAN_ID:
+        raise HTTPException(status_code=503, detail="Set RAZORPAY_PLAN_ID to your ₹159/month Razorpay plan.")
+    plan = razorpay_request("GET", "/plans/" + RAZORPAY_PLAN_ID)
+    item = plan.get("item") or {}
+    amount = item.get("amount", item.get("unit_amount"))
+    currency = str(item.get("currency") or "").upper()
+    period = str(plan.get("period") or "").lower()
+    interval = int(plan.get("interval") or 0)
+    if amount != 15900 or currency != "INR" or period != "monthly" or interval != 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Configured Razorpay plan is not exactly ₹159 INR per month. Update RAZORPAY_PLAN_ID to the correct monthly plan before accepting payments."
+        )
+    return plan
+
+
 def verify_signature(message: str, signature: str, secret: str):
     expected = hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature or "")
@@ -623,8 +363,7 @@ def create_trial_subscription(data: CheckoutCustomer):
     - ₹159/month plan starts 24 hours after subscription creation.
     - Customer approves the recurring UPI mandate in the same Razorpay Checkout.
     """
-    if not RAZORPAY_PLAN_ID:
-        raise HTTPException(status_code=503, detail="Razorpay monthly plan is not configured.")
+    verify_159_monthly_plan()
 
     customer = {
         "name": clean_customer(data.name, 100),
@@ -673,8 +412,7 @@ def create_trial_subscription(data: CheckoutCustomer):
 
 @app.post("/api/payments/trial/order")
 def create_trial_order(data: TrialOrderRequest):
-    if not RAZORPAY_PLAN_ID:
-        raise HTTPException(status_code=503, detail="Razorpay monthly plan is not configured.")
+    verify_159_monthly_plan()
     customer = {
         "name": clean_customer(data.name, 100),
         "email": clean_customer(data.email, 150),
@@ -698,6 +436,7 @@ def create_trial_order(data: TrialOrderRequest):
 
 @app.post("/api/payments/trial/complete")
 def complete_trial(data: TrialCompleteRequest):
+    verify_159_monthly_plan()
     if not verify_signature(
         data.razorpay_order_id + "|" + data.razorpay_payment_id,
         data.razorpay_signature, RAZORPAY_KEY_SECRET
@@ -740,6 +479,7 @@ def complete_trial(data: TrialCompleteRequest):
 
 @app.post("/api/payments/monthly/create")
 def create_monthly_subscription(data: CheckoutCustomer):
+    verify_159_monthly_plan()
     customer = {
         "name": clean_customer(data.name, 100),
         "email": clean_customer(data.email, 150),
@@ -824,12 +564,8 @@ def admin_payments(x_admin_key: str = Header(default="")):
     with get_db() as conn:
         orders = conn.execute("SELECT * FROM payment_orders ORDER BY id DESC LIMIT 500").fetchall()
         subs = conn.execute("SELECT * FROM subscriptions ORDER BY id DESC LIMIT 500").fetchall()
-        instagram_accounts = conn.execute(
-            "SELECT id, instagram_user_id, username, account_type, token_expires_at, connected_at, updated_at FROM instagram_connections ORDER BY id DESC LIMIT 500"
-        ).fetchall()
     return {
         "success": True,
         "payments": [dict(row) for row in orders],
-        "subscriptions": [dict(row) for row in subs],
-        "instagram_accounts": [dict(row) for row in instagram_accounts]
+        "subscriptions": [dict(row) for row in subs]
     }

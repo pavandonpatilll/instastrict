@@ -107,10 +107,10 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
 <div class="hero">
  <div class="tag">🛡️ YOUR DIGITAL SAFETY MATTERS</div>
  <h1>Protect Your <span>Instagram</span><br>Account Smarter</h1>
- <p>Learn safer Instagram habits, review essential security settings and get practical guidance against common online threats.</p>
+ <p>Paste your Instagram profile link and complete a quick security checklist to receive instant, practical account-safety guidance.</p>
 
- <div class="panel flow-hidden" id="check">
-  <label for="profile">Enter your Instagram profile link</label>
+ <div class="panel" id="check">
+  <label for="profile">Paste your Instagram profile link</label>
   <input id="profile" type="url" placeholder="https://www.instagram.com/username/">
 
   <div class="fieldlabel">Your security checklist</div>
@@ -126,17 +126,11 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
   <button class="full" id="checkBtn" onclick="checkProfile()">Generate My Safety Report →</button>
   <div id="result"></div>
 
-  <p class="notice">Never enter your Instagram password, OTP or recovery code here. This is a self-assessment based on your answers, not an Instagram account scan and not a guarantee against suspension.</p>
+  <p class="notice">No Instagram login or connection is required. Your report is generated from your profile link and checklist answers only. We do not access or scan private Instagram data, and no service can guarantee protection from suspension. Never enter your password, OTP or recovery code.</p>
  </div>
 </div>
 
-<div class="panel" id="instagramConnect">
- <h2 style="font-size:24px;margin-bottom:10px">Connect Instagram Officially</h2>
- <p style="color:#c4c4d2;line-height:1.7">Connect an eligible Instagram professional (Business or Creator) account using Meta's official login and choose what permissions to grant.</p>
- <button class="full" id="instagramConnectBtn" onclick="connectInstagram()">Connect Instagram with Meta →</button>
- <p id="instagramStatus" class="notice">We never ask for your Instagram password, OTP or recovery code. Personal accounts may not be eligible for this API.</p>
- <p class="notice">Connection provides only the data permitted by Meta. It cannot prevent Instagram restrictions or suspension.</p>
-</div>
+
 
 <section id="features">
  <h2>Your Account Safety Toolkit</h2>
@@ -187,7 +181,7 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
 <section id="about" class="policy-section">
  <h2>About InstaRaksha</h2>
  <div class="policy-card">
-  <p>InstaRaksha is an independent digital account-safety guidance service. We provide educational information and a self-assessment checklist to help visitors review common account-security habits, understand online risks and learn safer practices.</p>
+  <p>InstaRaksha is an independent digital account-safety guidance service. Visitors can paste an Instagram profile link and complete a self-assessment checklist to receive educational information, account-safety reminders and practical recommendations.</p>
 
   <h3>What We Provide</h3>
   <ul>
@@ -206,7 +200,7 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
 <section id="pricing" class="policy-section flow-hidden">
  <h2>Choose Your InstaRaksha Premium Plan</h2>
  <div class="policy-card">
-  <p>Try the free safety checklist first. Choose Premium only when you want the paid subscription features. Review the recurring amount and terms carefully before authorizing AutoPay.</p>
+  <p>Generate an instant self-assessment using your Instagram profile link and checklist answers. Choose a paid plan only after reviewing the upfront amount, recurring amount, billing timing and AutoPay terms.</p>
   <div class="payment-fields">
    <input id="payName" maxlength="100" placeholder="Your name">
    <input id="payEmail" type="email" maxlength="150" placeholder="Email (optional)">
@@ -216,7 +210,7 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
    <div class="payment-option">
     <h4>₹1 Start + AutoPay</h4>
     <p><strong>₹1 one-time payment now</strong></p>
-    <p>Then authorize a ₹159/month UPI AutoPay mandate. The first recurring charge is scheduled for 24 hours after the subscription is created. Please authorize the mandate before the scheduled start time. Actual debit timing and settlement depend on Razorpay, your bank and mandate processing. Monthly renewals follow the mandate.</p>
+    <p>Then authorize a ₹159/month UPI AutoPay mandate. The ₹159/month subscription is scheduled to start 24 hours after the subscription is created. The ₹1 upfront amount is collected during subscription authorization. Actual debit timing and settlement depend on Razorpay, your bank and mandate processing. Monthly renewals follow the mandate.</p>
     <button id="trialPayBtn" onclick="startTrialPayment()">Continue with ₹1 + AutoPay</button>
    </div>
    <div class="payment-option">
@@ -227,9 +221,9 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
    </div>
   </div>
   <p id="paymentStatus" role="status" aria-live="polite"></p>
-  <p class="notice">The ₹1 upfront amount and ₹159/month AutoPay mandate are presented together in one Razorpay checkout. The first recurring ₹159 charge is scheduled for 24 hours after subscription creation; actual debit and settlement timing depend on Razorpay, your bank and mandate processing. Premium access is subject to verified payment/subscription status. Cancel future renewals using the payment provider's supported process; a debit already initiated may still be processed.</p>
+  <p class="notice">The ₹1 upfront amount is collected during subscription authorization. The ₹159/month recurring plan is scheduled to start 24 hours after subscription creation. Actual debit timing depends on Razorpay, your bank and mandate processing. Premium access is subject to verified payment/subscription status. Cancel future renewals using the payment provider's supported process; a debit already initiated may still be processed.</p>
   <h3>What Is Included</h3>
-  <p>Access to the InstaRaksha service and its account-safety guidance features available under the selected plan. Any Instagram connection uses Meta's official OAuth permissions and is available only for eligible account types and approved app permissions.</p>
+  <p>Access to InstaRaksha account-safety guidance features available under the selected plan. Reports are based on the information you submit and do not scan Instagram account data.</p>
   <h3>Independent service notice</h3>
   <p>InstaRaksha is not affiliated with Instagram or Meta and cannot guarantee account recovery, prevent restrictions, or prevent suspension.</p>
  </div>
@@ -458,58 +452,11 @@ async function startMonthlyPayment(){
 
 
 
-async function connectInstagram(){
- const btn=$("instagramConnectBtn");
- const status=$("instagramStatus");
- btn.disabled=true;
- status.textContent="Opening Meta authorization…";
- try{
-  const response=await fetch(API+"/api/instagram/connect");
-  const data=await response.json();
-  if(!response.ok)throw new Error(data.detail||"Instagram Connect is not configured.");
-  if(!data.auth_url)throw new Error("Meta authorization URL was not returned.");
-  window.location.href=data.auth_url;
- }catch(error){
-  status.textContent=error.message;
-  btn.disabled=false;
- }
-}
-
-function unlockReportAfterInstagram(){
- $("check").classList.remove("flow-hidden");
- $("instagramConnect").querySelector("h2").textContent="✓ Instagram Connected";
- $("instagramConnectBtn").classList.add("flow-hidden");
- $("check").scrollIntoView({behavior:"smooth",block:"center"});
-}
-
-function showInstagramReturn(){
- const params=new URLSearchParams(window.location.search);
- const result=params.get("instagram");
- if(result==="connected"){
-  sessionStorage.setItem("instarakshaInstagramConnected","1");
-  $("instagramStatus").textContent="✓ Instagram connected successfully: @"+(params.get("username")||"account")+". Now paste your profile link and generate your report below.";
-  unlockReportAfterInstagram();
-  history.replaceState({},document.title,window.location.pathname+window.location.hash);
- }else if(result==="denied"){
-  $("instagramStatus").textContent="Instagram authorization was cancelled or denied. You can try again.";
-  history.replaceState({},document.title,window.location.pathname+window.location.hash);
- }else if(result==="error"){
-  $("instagramStatus").textContent="Instagram connection could not be completed: "+(params.get("message")||"Please check your Meta configuration and try again.");
-  history.replaceState({},document.title,window.location.pathname+window.location.hash);
- }else if(sessionStorage.getItem("instarakshaInstagramConnected")==="1"){
-  $("instagramStatus").textContent="✓ Instagram is connected in this browser session. Paste your profile link below to generate your report.";
-  unlockReportAfterInstagram();
- }
-}
 
 async function checkProfile(){
  const btn=$("checkBtn"), result=$("result");
  const url=$("profile").value.trim();
 
- if(sessionStorage.getItem("instarakshaInstagramConnected")!=="1"){
-  alert("Please connect your Instagram account with Meta first.");
-  return;
- }
 
  if(!url){
   alert("Please enter your Instagram profile link.");
@@ -552,9 +499,9 @@ async function checkProfile(){
     </div>
    </div>
    <p>${escapeHtml(data.notice)}</p>
-   <strong>Recommended safety steps:</strong>
+   <strong>Recommended account-safety steps:</strong>
    <ul>${data.tips.map(t=>"<li>"+escapeHtml(t)+"</li>").join("")}</ul>
-   <p style="margin-top:18px;color:#ffb4d7"><strong>Your report is ready.</strong> Choose a Premium plan below to continue.</p>`;
+   <p style="margin-top:18px;color:#ffb4d7"><strong>Your self-assessment is ready.</strong> This is not a live Instagram scan or a prediction of suspension. Choose a Premium plan below to continue.</p>`;
   $("pricing").classList.remove("flow-hidden");
   $("pricingNav").classList.remove("flow-hidden");
   $("premiumNav").classList.remove("flow-hidden");
@@ -645,7 +592,6 @@ async function loadReviews(){
 
 loadReviews();
 loadPaymentConfig();
-showInstagramReturn();
 </script>
 
 </body>
