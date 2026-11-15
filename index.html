@@ -84,6 +84,13 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
 .payment-fields{margin-top:18px;display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .payment-fields input{margin:0}
 #paymentStatus{color:#ffb4d7;margin-top:12px;line-height:1.6;font-size:13px}
+ .live-status{display:flex;align-items:center;gap:9px;color:#8ef0b2;font-size:13px;margin:12px 0}
+ .live-dot{width:9px;height:9px;border-radius:50%;background:#51e69a;box-shadow:0 0 12px #51e69a;animation:pulse 1.4s infinite}
+ @keyframes pulse{50%{opacity:.35;transform:scale(.75)}}
+ .scan-steps{color:#c9c8d8;font-size:13px;line-height:1.9;margin:12px 0}
+ .account-box{max-width:720px;margin:14px auto 0;padding:16px;border:1px solid #3c7459;background:#10251f;border-radius:14px;text-align:left}
+ .account-box strong{color:#8ef0b2}
+ .account-meta{font-size:12px;color:#b7c9c0;line-height:1.7;margin-top:6px}
 .flow-hidden{display:none!important}
 @media(max-width:600px){.payment-fields{grid-template-columns:1fr}}
 </style>
@@ -211,7 +218,7 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
     <h4>₹1 Start </h4>
     <p><strong>₹1 one-time payment now</strong></p>
     <p> The monthly subscription is scheduled to start 24 hours after the subscription is created. The ₹1 upfront amount is collected during subscription authorization. Actual debit timing and settlement depend on Razorpay, your bank and mandate processing. Monthly renewals follow the mandate.</p>
-    <button id="trialPayBtn" onclick="startTrialPayment()">Continue with ₹1 free trial</button>
+    <button id="trialPayBtn" onclick="startTrialPayment()">Continue with ₹1 + ₹159/month AutoPay</button>
    </div>
    <div class="payment-option">
     <h4>Direct Monthly </h4>
@@ -349,8 +356,71 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 <script>
 const API = "https://instastrict.onrender.com";
-
 const $ = id => document.getElementById(id);
+const CLIENT_KEY = "instaraksha_browser_id_v1";
+function getClientId(){
+ let id=localStorage.getItem(CLIENT_KEY);
+ if(!id){
+  id=(crypto.randomUUID?crypto.randomUUID():("ir-"+Date.now()+"-"+Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2)));
+  localStorage.setItem(CLIENT_KEY,id);
+ }
+ return id;
+}
+const CLIENT_ID = getClientId();
+function saveLocalState(){
+ const state={
+  profile:$("profile").value.trim(),
+  answers:{two_factor:$("two_factor").checked,unique_password:$("unique_password").checked,email_phone:$("email_phone").checked,login_activity:$("login_activity").checked,third_party_apps:$("third_party_apps").checked}
+ };
+ localStorage.setItem("instaraksha_profile_state_v1",JSON.stringify(state));
+}
+function restoreLocalState(){
+ try{
+  const state=JSON.parse(localStorage.getItem("instaraksha_profile_state_v1")||"{}");
+  if(state.profile)$("profile").value=state.profile;
+  Object.entries(state.answers||{}).forEach(([k,v])=>{if($(k))$(k).checked=!!v;});
+ }catch(e){}
+}
+function showSavedAccount(account){
+ const box=$("savedAccount");
+ if(!account || (!account.check && !(account.subscriptions||[]).length))return;
+ $("pricing").classList.remove("flow-hidden");
+ $("pricingNav").classList.remove("flow-hidden");
+ $("premiumNav").classList.remove("flow-hidden");
+ box.style.display="block";
+ const c=account.check;
+ const sub=(account.subscriptions||[])[0];
+ box.innerHTML=`<div class="live-status"><span class="live-dot"></span> YOUR SAVED INSTRAKASHA STATUS</div>
+  ${c?`<strong>Last profile: @${escapeHtml(c.username)}</strong><div class="account-meta">Security habits score: ${Number(c.score)||0}% · Last report: ${escapeHtml(new Date(c.created_at).toLocaleString())}</div>`:""}
+  ${sub?`<div class="account-meta" style="margin-top:8px">Plan: <strong>${sub.plan_type==="trial_1_then_159"?"₹1 + ₹159/month":"₹159/month"}</strong><br>Subscription: <strong>${escapeHtml(sub.status||"processing")}</strong></div>`:""}
+  ${account.premium?'<p style="color:#8ef0b2;margin-top:8px"><strong>✓ Premium access is active according to the latest server status.</strong></p>':'<p class="account-meta">Saved on this browser. Premium access appears after Razorpay confirms an active/authenticated subscription.</p>'}`;
+}
+async function refreshAccount(){
+ try{
+  const r=await fetch(API+"/api/account?client_id="+encodeURIComponent(CLIENT_ID),{cache:"no-store"});
+  if(!r.ok)return;
+  const a=await r.json();
+  showSavedAccount(a);
+  if(a.check){
+   $("profile").value=a.check.profile_url||$("profile").value;
+   const answers=a.check.answers||{};
+   Object.entries(answers).forEach(([k,v])=>{if($(k))$(k).checked=!!v;});
+   if(!localStorage.getItem("instaraksha_report_cache_v1"))localStorage.setItem("instaraksha_report_cache_v1",JSON.stringify(a.check));
+  }
+ }catch(e){}
+}
+function restoreCachedReport(){
+ try{
+  const d=JSON.parse(localStorage.getItem("instaraksha_report_cache_v1")||"null");
+  if(!d)return;
+  $("pricing").classList.remove("flow-hidden");
+  $("pricingNav").classList.remove("flow-hidden");
+  $("premiumNav").classList.remove("flow-hidden");
+  const tips=d.tips||[];
+  $("result").style.display="block";
+  $("result").innerHTML=`<strong style="color:#65e6a1">✓ Your saved self-assessment</strong><p>Profile: @${escapeHtml(d.username||"")}</p><div class="score-row"><div class="score">${Number(d.score)||0}%</div><div style="flex:1"><b>Security habits score</b><div class="meter"><div style="width:${Math.max(0,Math.min(100,Number(d.score)||0))}%"></div></div><small style="color:#aaa">Based only on your five answers</small></div></div><p>${escapeHtml(d.notice||"Saved report")}</p><strong>Recommended account-safety steps:</strong><ul>${tips.map(t=>"<li>"+escapeHtml(t)+"</li>").join("")}</ul><p class="notice">Restored from your saved report. Generate again after changing your checklist.</p>`;
+ }catch(e){}
+}
 
 const escapeHtml = value => String(value).replace(/[&<>"']/g, c => ({
  "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"
@@ -423,7 +493,7 @@ async function startTrialPayment(){
    body:JSON.stringify(customerDetails())
   });
   const data=await response.json();
-  if(!response.ok)throw new Error(data.detail||"Could not create the subscription.");
+  if(!response.ok)throw new Error(data.detail||"Payment could not be started. Please retry or contact support.");
   if(!data.subscription_id)throw new Error("Razorpay did not return a subscription ID.");
   if(data.key_id)razorpayKeyId=data.key_id;
   setPaymentBusy(false,"One checkout is ready. Approve ₹1 upfront and the ₹159/month AutoPay mandate in the same Razorpay window.");
@@ -441,7 +511,7 @@ async function startMonthlyPayment(){
    body:JSON.stringify(customerDetails())
   });
   const data=await response.json();
-  if(!response.ok)throw new Error(data.detail||"Could not create subscription.");
+  if(!response.ok)throw new Error(data.detail||"Payment could not be started. Please retry or contact support.");
   setPaymentBusy(false);
   openSubscriptionCheckout(data.subscription_id,"InstaRaksha ₹159 monthly subscription");
  }catch(error){
@@ -480,7 +550,7 @@ async function checkProfile(){
   const response=await fetch(API+"/api/check",{
    method:"POST",
    headers:{"Content-Type":"application/json"},
-   body:JSON.stringify({profile_url:url,answers:answers})
+   body:JSON.stringify({profile_url:url,answers:answers,client_id:CLIENT_ID})
   });
 
   const data=await response.json();
@@ -502,6 +572,8 @@ async function checkProfile(){
    <strong>Recommended account-safety steps:</strong>
    <ul>${data.tips.map(t=>"<li>"+escapeHtml(t)+"</li>").join("")}</ul>
    <p style="margin-top:18px;color:#ffb4d7"><strong>Your self-assessment is ready.</strong> This is not a live Instagram scan or a prediction of suspension. Choose a Premium plan below to continue.</p>`;
+  localStorage.setItem("instaraksha_report_cache_v1",JSON.stringify(data));
+  saveLocalState();
   $("pricing").classList.remove("flow-hidden");
   $("pricingNav").classList.remove("flow-hidden");
   $("premiumNav").classList.remove("flow-hidden");
@@ -590,8 +662,13 @@ async function loadReviews(){
  }
 }
 
+restoreLocalState();
+restoreCachedReport();
+document.querySelectorAll("#profile,.check-grid input").forEach(el=>el.addEventListener("change",saveLocalState));
+$("profile").addEventListener("input",saveLocalState);
 loadReviews();
 loadPaymentConfig();
+refreshAccount();
 </script>
 
 </body>

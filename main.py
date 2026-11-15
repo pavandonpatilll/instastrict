@@ -46,6 +46,8 @@ def init_db():
             conn.execute("ALTER TABLE checks ADD COLUMN answers TEXT NOT NULL DEFAULT '{}'")
         if "score" not in columns:
             conn.execute("ALTER TABLE checks ADD COLUMN score INTEGER NOT NULL DEFAULT 0")
+        if "client_id" not in columns:
+            conn.execute("ALTER TABLE checks ADD COLUMN client_id TEXT NOT NULL DEFAULT ''")
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS reviews (
@@ -65,6 +67,7 @@ init_db()
 class ProfileRequest(BaseModel):
     profile_url: str = Field(min_length=10, max_length=300)
     answers: dict[str, bool] = Field(default_factory=dict)
+    client_id: str = Field(default="", max_length=80)
 
 class ReviewRequest(BaseModel):
     name: str = Field(min_length=2, max_length=50)
@@ -108,9 +111,9 @@ def submit_profile(data: ProfileRequest):
 
     with get_db() as conn:
         cursor = conn.execute(
-            """INSERT INTO checks (username, profile_url, created_at, answers, score)
-               VALUES (?, ?, ?, ?, ?)""",
-            (username, profile_url, now, json.dumps(answers), score)
+            """INSERT INTO checks (username, profile_url, created_at, answers, score, client_id)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (username, profile_url, now, json.dumps(answers), score, clean_customer(data.client_id, 80))
         )
         conn.commit()
         record_id = cursor.lastrowid
@@ -258,10 +261,14 @@ def payment_db_init():
                 trial_order_id TEXT,
                 first_charge_at INTEGER,
                 latest_payment_id TEXT,
+                client_id TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
         """)
+        sub_columns = {row["name"] for row in conn.execute("PRAGMA table_info(subscriptions)").fetchall()}
+        if "client_id" not in sub_columns:
+            conn.execute("ALTER TABLE subscriptions ADD COLUMN client_id TEXT NOT NULL DEFAULT ''")
         conn.commit()
 
 payment_db_init()
@@ -318,6 +325,7 @@ class CheckoutCustomer(BaseModel):
     name: str = Field(default="", max_length=100)
     email: str = Field(default="", max_length=150)
     contact: str = Field(default="", max_length=20)
+    client_id: str = Field(default="", max_length=80)
 
 class TrialOrderRequest(CheckoutCustomer):
     pass
@@ -338,14 +346,14 @@ def save_subscription(sub, plan_type, customer, trial_order_id=None, first_charg
         conn.execute("""
             INSERT INTO subscriptions
             (subscription_id, plan_type, plan_id, status, customer_name, customer_email,
-             customer_contact, trial_order_id, first_charge_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             customer_contact, trial_order_id, first_charge_at, client_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(subscription_id) DO UPDATE SET
-              status=excluded.status, updated_at=excluded.updated_at
+              status=excluded.status, client_id=excluded.client_id, updated_at=excluded.updated_at
         """, (
             sub["id"], plan_type, RAZORPAY_PLAN_ID, sub.get("status", "created"),
             customer.get("name", ""), customer.get("email", ""), customer.get("contact", ""),
-            trial_order_id, first_charge_at, now, now
+            trial_order_id, first_charge_at, customer.get("client_id", ""), now, now
         ))
         conn.commit()
 
@@ -368,7 +376,8 @@ def create_trial_subscription(data: CheckoutCustomer):
     customer = {
         "name": clean_customer(data.name, 100),
         "email": clean_customer(data.email, 150),
-        "contact": clean_customer(data.contact, 20)
+        "contact": clean_customer(data.contact, 20),
+        "client_id": clean_customer(data.client_id, 80)
     }
 
     first_charge_at = int(time.time()) + TRIAL_START_DELAY_SECONDS
@@ -391,6 +400,7 @@ def create_trial_subscription(data: CheckoutCustomer):
         "notes": {
             "plan_type": "trial_1_then_159",
             "customer_name": customer["name"],
+            "client_id": customer["client_id"],
             "upfront_amount_paise": str(TRIAL_AMOUNT_PAISE),
             "first_recurring_amount": "15900",
             "first_recurring_after_hours": "24"
@@ -416,7 +426,8 @@ def create_trial_order(data: TrialOrderRequest):
     customer = {
         "name": clean_customer(data.name, 100),
         "email": clean_customer(data.email, 150),
-        "contact": clean_customer(data.contact, 20)
+        "contact": clean_customer(data.contact, 20),
+        "client_id": clean_customer(data.client_id, 80)
     }
     order = razorpay_request("POST", "/orders", {
         "amount": TRIAL_AMOUNT_PAISE,
@@ -483,7 +494,8 @@ def create_monthly_subscription(data: CheckoutCustomer):
     customer = {
         "name": clean_customer(data.name, 100),
         "email": clean_customer(data.email, 150),
-        "contact": clean_customer(data.contact, 20)
+        "contact": clean_customer(data.contact, 20),
+        "client_id": clean_customer(data.client_id, 80)
     }
     sub = razorpay_request("POST", "/subscriptions", {
         "plan_id": RAZORPAY_PLAN_ID,
@@ -522,6 +534,60 @@ def verify_subscription(data: SubscriptionVerifyRequest):
               payment.get("amount", 0), payment.get("status", "authorized"), now, now))
         conn.commit()
     return {"success": True, "subscription_status": sub.get("status"), "payment_status": payment.get("status")}
+
+@app.get("/api/account")
+def account_state(client_id: str):
+    client_id = clean_customer(client_id, 80)
+    if len(client_id) < 20:
+        raise HTTPException(status_code=400, detail="Invalid browser account identifier.")
+    with get_db() as conn:
+        check = conn.execute(
+            "SELECT id, username, profile_url, created_at, answers, score FROM checks WHERE client_id=? ORDER BY id DESC LIMIT 1",
+            (client_id,)
+        ).fetchone()
+        subs = conn.execute(
+            "SELECT subscription_id, plan_type, status, customer_name, customer_email, customer_contact, first_charge_at, created_at, updated_at FROM subscriptions WHERE client_id=? ORDER BY id DESC LIMIT 10",
+            (client_id,)
+        ).fetchall()
+    latest = dict(check) if check else None
+    if latest:
+        try:
+            latest["answers"] = json.loads(latest.get("answers") or "{}")
+        except Exception:
+            latest["answers"] = {}
+    subscriptions = [dict(row) for row in subs]
+    # Refresh the saved status from Razorpay so a later visit does not rely only on
+    # the status captured during checkout. If Razorpay is temporarily unreachable,
+    # keep the last webhook/database status and still return the account page.
+    for saved_sub in subscriptions:
+        if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
+            try:
+                live_sub = razorpay_request("GET", "/subscriptions/" + saved_sub["subscription_id"])
+                live_status = str(live_sub.get("status") or saved_sub.get("status") or "unknown")
+                saved_sub["status"] = live_status
+                with get_db() as conn:
+                    conn.execute(
+                        "UPDATE subscriptions SET status=?, updated_at=? WHERE subscription_id=?",
+                        (live_status, datetime.now(timezone.utc).isoformat(), saved_sub["subscription_id"])
+                    )
+                    conn.commit()
+            except Exception:
+                pass
+    premium_statuses = {"authenticated", "active"}
+    premium = any(str(s.get("status", "")).lower() in premium_statuses for s in subscriptions)
+    if latest:
+        latest["tips"] = [
+            "Turn on two-factor authentication in Instagram and keep recovery details current.",
+            "Use a unique password, never share OTPs, and review login activity for unknown sessions.",
+            "Avoid follower, like, comment or automation apps that ask for your Instagram login.",
+            "Avoid repetitive high-volume actions such as rapid follow/unfollow, likes or comments.",
+            "Follow Instagram's Community Guidelines and respect copyright; remove content that violates them.",
+            "Review Account Status inside Instagram and use the in-app appeal/review option if Instagram flags content or activity.",
+            "Remove unknown third-party apps and websites that have access to your account."
+        ]
+        latest["notice"] = "This self-assessment uses only your profile link and checklist answers. We did not access or scan your Instagram account. It cannot predict or prevent suspension."
+    return {"success": True, "check": latest, "subscriptions": subscriptions, "premium": premium}
+
 
 @app.post("/api/payments/webhook")
 async def razorpay_webhook(request: Request):
