@@ -626,12 +626,13 @@ async function loadReviews(){
 
   if(!response.ok)throw new Error("Reviews unavailable");
 
-  if(!data.reviews.length){
+  const reviews = Array.isArray(data.reviews) ? data.reviews : [];
+  if(!reviews.length){
    box.innerHTML='<p style="color:#aaa">No approved reviews yet. You can submit the first review.</p>';
    return;
   }
 
-  box.innerHTML=data.reviews.map(review=>`
+  box.innerHTML=reviews.map(review=>`
    <article class="review-card">
     <div class="review-head">
      <b>${escapeHtml(review.name)}</b>
