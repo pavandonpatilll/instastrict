@@ -408,7 +408,7 @@ function showSavedAccount(account){
  const sub=(account.subscriptions||[])[0];
  box.innerHTML=`<div class="live-status"><span class="live-dot"></span> YOUR SAVED INSTRAKASHA STATUS</div>
   ${c?`<strong>Last profile: @${escapeHtml(c.username)}</strong><div class="account-meta">Security habits score: ${Number(c.score)||0}% · Last report: ${escapeHtml(new Date(c.created_at).toLocaleString())}</div>`:""}
-  ${sub?`<div class="account-meta" style="margin-top:8px">Plan: <strong>${sub.plan_type==="trial_1_then_159"?"₹1 + ₹159/month":"₹159/month"}</strong><br>Subscription: <strong>${escapeHtml(sub.status||"processing")}</strong></div>`:""}
+  ${sub?`<div class="account-meta" style="margin-top:8px">Plan: <strong>${sub.plan_type==="trial_1_then_159"?"₹1 /monthly":"₹159/month"}</strong><br>Subscription: <strong>${escapeHtml(sub.status||"processing")}</strong></div>`:""}
   ${account.has_access?'<p style="color:#8ef0b2;margin-top:8px"><strong>✓ Payment verified. Your report is unlocked.</strong></p>':'<p class="account-meta">Your report will appear here after Razorpay confirms payment authorization.</p>'}`;
 }
 async function refreshAccount(){
