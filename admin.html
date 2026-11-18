@@ -34,14 +34,27 @@ a{color:#e8a5ff;overflow-wrap:anywhere}.tablewrap{overflow-x:auto}small,.muted{c
   <div class="stat">Total profile checks<div class="number" id="totalChecks">--</div></div>
   <div class="stat">Total reviews<div class="number" id="totalReviews">--</div></div>
   <div class="stat">Pending reviews<div class="number" id="pendingReviews">--</div></div>
+  <div class="stat">Total website visits<div class="number" id="totalVisits">--</div></div>
+  <div class="stat">Unique browsers<div class="number" id="uniqueVisitors">--</div></div>
+  <div class="stat">Today's visits<div class="number" id="todayVisits">--</div></div>
+  <div class="stat">Yesterday's visits<div class="number" id="yesterdayVisits">--</div></div>
  </div>
+</div>
+
+<div class="card">
+ <h3>Website Traffic</h3>
+ <p class="muted">Visit tracking starts after this update is deployed. Earlier visits are not available unless they were recorded by existing analytics or hosting logs.</p>
+ <div class="tablewrap"><table>
+  <thead><tr><th>Date (India)</th><th>Page visits</th><th>Unique browsers</th></tr></thead>
+  <tbody id="visitRows"><tr><td colspan="3">Please login first.</td></tr></tbody>
+ </table></div>
 </div>
 
 <div class="card">
  <h3>Submitted Profiles</h3>
  <div class="tablewrap"><table>
- <thead><tr><th>ID</th><th>Username</th><th>Self score</th><th>Profile</th><th>Date</th></tr></thead>
- <tbody id="users"><tr><td colspan="5">Please login first.</td></tr></tbody>
+ <thead><tr><th>ID</th><th>Username</th><th>Self score</th><th>Payment unlock</th><th>Profile</th><th>Date</th></tr></thead>
+ <tbody id="users"><tr><td colspan="6">Please login first.</td></tr></tbody>
  </table></div>
 </div>
 
@@ -92,14 +105,22 @@ async function loadDashboard(){
   document.getElementById("totalChecks").textContent=data.total_checks;
   document.getElementById("totalReviews").textContent=data.total_reviews;
   document.getElementById("pendingReviews").textContent=data.pending_reviews;
+  document.getElementById("totalVisits").textContent=data.total_visits??0;
+  document.getElementById("uniqueVisitors").textContent=data.unique_visitors??0;
+  document.getElementById("todayVisits").textContent=data.today_visits??0;
+  document.getElementById("yesterdayVisits").textContent=data.yesterday_visits??0;
+  document.getElementById("visitRows").innerHTML=(data.visits_by_day||[]).length
+   ?data.visits_by_day.map(day=>`<tr><td>${safe(day.visit_date)}</td><td>${day.visits}</td><td>${day.unique_visitors}</td></tr>`).join("")
+   :'<tr><td colspan="3">No visits recorded yet.</td></tr>';
 
   document.getElementById("users").innerHTML=data.checks.length
    ?data.checks.map(user=>`<tr>
       <td>${user.id}</td><td>@${safe(user.username)}</td><td>${user.score}%</td>
+      <td class="${user.paid?"approved":"pending"}">${user.paid?"Unlocked":"Awaiting payment"}</td>
       <td><a href="${safe(user.profile_url)}" target="_blank" rel="noopener noreferrer">Open profile</a></td>
       <td>${safe(new Date(user.created_at).toLocaleString())}</td>
      </tr>`).join("")
-   :'<tr><td colspan="5">No profiles submitted yet.</td></tr>';
+   :'<tr><td colspan="6">No profiles submitted yet.</td></tr>';
 
   document.getElementById("reviewRows").innerHTML=data.reviews.length
    ?data.reviews.map(review=>`<tr>

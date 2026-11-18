@@ -5,7 +5,7 @@ import sqlite3
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse, urlencode
 
 from fastapi import FastAPI, HTTPException, Header, Request
@@ -48,6 +48,19 @@ def init_db():
             conn.execute("ALTER TABLE checks ADD COLUMN score INTEGER NOT NULL DEFAULT 0")
         if "client_id" not in columns:
             conn.execute("ALTER TABLE checks ADD COLUMN client_id TEXT NOT NULL DEFAULT ''")
+        if "paid" not in columns:
+            conn.execute("ALTER TABLE checks ADD COLUMN paid INTEGER NOT NULL DEFAULT 0")
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS web_visits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id TEXT NOT NULL,
+                visit_date TEXT NOT NULL,
+                path TEXT NOT NULL DEFAULT '/',
+                referrer TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+        """)
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS reviews (
@@ -104,40 +117,57 @@ def health():
 @app.post("/api/check")
 def submit_profile(data: ProfileRequest):
     username, profile_url = validate_instagram_url(data.profile_url)
+    client_id = clean_customer(data.client_id, 80)
+    if len(client_id) < 20:
+        raise HTTPException(status_code=400, detail="Please refresh the page and try again.")
     allowed = {"two_factor", "unique_password", "email_phone", "login_activity", "third_party_apps"}
     answers = {key: bool(data.answers.get(key, False)) for key in allowed}
     score = round(sum(answers.values()) / len(allowed) * 100)
     now = datetime.now(timezone.utc).isoformat()
 
     with get_db() as conn:
+        active_plan = conn.execute(
+            "SELECT 1 FROM subscriptions WHERE client_id=? AND lower(status) IN ('authenticated','active') LIMIT 1",
+            (client_id,)
+        ).fetchone()
+        previous_paid = conn.execute(
+            "SELECT 1 FROM checks WHERE client_id=? AND paid=1 LIMIT 1", (client_id,)
+        ).fetchone()
+        has_existing_access = bool(active_plan or previous_paid)
         cursor = conn.execute(
-            """INSERT INTO checks (username, profile_url, created_at, answers, score, client_id)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (username, profile_url, now, json.dumps(answers), score, clean_customer(data.client_id, 80))
+            """INSERT INTO checks (username, profile_url, created_at, answers, score, client_id, paid)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (username, profile_url, now, json.dumps(answers), score, client_id, 1 if has_existing_access else 0)
         )
         conn.commit()
         record_id = cursor.lastrowid
 
-    tips = [
-        "Turn on two-factor authentication in Instagram and keep recovery details current.",
-        "Use a unique password, never share OTPs, and review login activity for unknown sessions.",
-        "Avoid follower, like, comment or automation apps that ask for your Instagram login.",
-        "Avoid repetitive high-volume actions such as rapid follow/unfollow, likes or comments.",
-        "Follow Instagram's Community Guidelines and respect copyright; remove content that violates them.",
-        "Review Account Status inside Instagram and use the in-app appeal/review option if Instagram flags content or activity.",
-        "Remove unknown third-party apps and websites that have access to your account."
-    ]
+    # The report itself is deliberately withheld until the payment provider confirms authorization.
     return {
         "success": True,
         "id": record_id,
         "username": username,
-        "profile_url": profile_url,
-        "score": score,
-        "score_label": "Security habits self-assessment",
-        "notice": "This self-assessment uses only your profile link and checklist answers. We did not access or scan your Instagram account. It cannot predict or prevent suspension.",
-        "answers": answers,
-        "tips": tips
+        "payment_required": not has_existing_access,
+        "message": "Your safety assessment is saved. Complete the ₹1 trial checkout to unlock your report."
     }
+
+class VisitRequest(BaseModel):
+    client_id: str = Field(min_length=20, max_length=80)
+    path: str = Field(default="/", max_length=200)
+    referrer: str = Field(default="", max_length=500)
+
+@app.post("/api/visit")
+def record_visit(data: VisitRequest):
+    now = datetime.now(timezone.utc)
+    india_now = now + timedelta(hours=5, minutes=30)
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO web_visits (client_id, visit_date, path, referrer, created_at) VALUES (?, ?, ?, ?, ?)",
+            (clean_customer(data.client_id, 80), india_now.date().isoformat(),
+             clean_customer(data.path, 200) or "/", clean_customer(data.referrer, 500), now.isoformat())
+        )
+        conn.commit()
+    return {"success": True}
 
 @app.post("/api/reviews")
 def create_review(data: ReviewRequest):
@@ -185,16 +215,33 @@ def admin_stats(x_admin_key: str = Header(default="")):
 @app.get("/api/admin/dashboard")
 def admin_dashboard(x_admin_key: str = Header(default="")):
     require_admin(x_admin_key)
+    today = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).date()
+    today_text = today.isoformat()
+    yesterday_text = (today - timedelta(days=1)).isoformat()
     with get_db() as conn:
-        checks = conn.execute("SELECT id, username, profile_url, created_at, score, answers FROM checks ORDER BY id DESC LIMIT 200").fetchall()
+        checks = conn.execute("SELECT id, username, profile_url, created_at, score, answers, paid FROM checks ORDER BY id DESC LIMIT 200").fetchall()
         reviews = conn.execute("SELECT id, name, rating, message, approved, created_at FROM reviews ORDER BY id DESC LIMIT 200").fetchall()
         total_checks = conn.execute("SELECT COUNT(*) FROM checks").fetchone()[0]
         total_reviews = conn.execute("SELECT COUNT(*) FROM reviews").fetchone()[0]
         pending = conn.execute("SELECT COUNT(*) FROM reviews WHERE approved=0").fetchone()[0]
+        total_visits = conn.execute("SELECT COUNT(*) FROM web_visits").fetchone()[0]
+        unique_visitors = conn.execute("SELECT COUNT(DISTINCT client_id) FROM web_visits").fetchone()[0]
+        today_visits = conn.execute("SELECT COUNT(*) FROM web_visits WHERE visit_date=?", (today_text,)).fetchone()[0]
+        today_unique = conn.execute("SELECT COUNT(DISTINCT client_id) FROM web_visits WHERE visit_date=?", (today_text,)).fetchone()[0]
+        yesterday_visits = conn.execute("SELECT COUNT(*) FROM web_visits WHERE visit_date=?", (yesterday_text,)).fetchone()[0]
+        yesterday_unique = conn.execute("SELECT COUNT(DISTINCT client_id) FROM web_visits WHERE visit_date=?", (yesterday_text,)).fetchone()[0]
+        visits_by_day = conn.execute("SELECT visit_date, COUNT(*) AS visits, COUNT(DISTINCT client_id) AS unique_visitors FROM web_visits GROUP BY visit_date ORDER BY visit_date DESC LIMIT 14").fetchall()
     return {
         "total_checks": total_checks,
         "total_reviews": total_reviews,
         "pending_reviews": pending,
+        "total_visits": total_visits,
+        "unique_visitors": unique_visitors,
+        "today_visits": today_visits,
+        "today_unique_visitors": today_unique,
+        "yesterday_visits": yesterday_visits,
+        "yesterday_unique_visitors": yesterday_unique,
+        "visits_by_day": [dict(row) for row in visits_by_day],
         "checks": [dict(row) for row in checks],
         "reviews": [dict(row) for row in reviews]
     }
@@ -520,11 +567,19 @@ def verify_subscription(data: SubscriptionVerifyRequest):
     payment = razorpay_request("GET", "/payments/" + data.razorpay_payment_id)
     if payment.get("subscription_id") and payment.get("subscription_id") != data.razorpay_subscription_id:
         raise HTTPException(status_code=400, detail="Authorization payment does not match this subscription.")
+    payment_status = str(payment.get("status") or "").lower()
+    if payment_status not in {"authorized", "captured"}:
+        raise HTTPException(status_code=400, detail="Razorpay has not confirmed the subscription payment/authorization yet.")
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
+        saved_sub = conn.execute("SELECT client_id, plan_type FROM subscriptions WHERE subscription_id=?", (data.razorpay_subscription_id,)).fetchone()
+        if not saved_sub:
+            raise HTTPException(status_code=404, detail="Subscription record was not found. Please contact support.")
         conn.execute("""
             UPDATE subscriptions SET status=?, latest_payment_id=?, updated_at=? WHERE subscription_id=?
         """, (sub.get("status", "created"), data.razorpay_payment_id, now, data.razorpay_subscription_id))
+        if saved_sub["client_id"]:
+            conn.execute("UPDATE checks SET paid=1 WHERE client_id=?", (saved_sub["client_id"],))
         conn.execute("""
             INSERT OR IGNORE INTO payment_orders
             (order_id, payment_id, plan_type, amount, status, created_at, updated_at)
@@ -542,7 +597,7 @@ def account_state(client_id: str):
         raise HTTPException(status_code=400, detail="Invalid browser account identifier.")
     with get_db() as conn:
         check = conn.execute(
-            "SELECT id, username, profile_url, created_at, answers, score FROM checks WHERE client_id=? ORDER BY id DESC LIMIT 1",
+            "SELECT id, username, profile_url, created_at, answers, score, paid FROM checks WHERE client_id=? ORDER BY id DESC LIMIT 1",
             (client_id,)
         ).fetchone()
         subs = conn.execute(
@@ -575,7 +630,8 @@ def account_state(client_id: str):
                 pass
     premium_statuses = {"authenticated", "active"}
     premium = any(str(s.get("status", "")).lower() in premium_statuses for s in subscriptions)
-    if latest:
+    has_access = bool((latest and int(latest.get("paid", 0) or 0) == 1) or premium)
+    if latest and has_access:
         latest["tips"] = [
             "Turn on two-factor authentication in Instagram and keep recovery details current.",
             "Use a unique password, never share OTPs, and review login activity for unknown sessions.",
@@ -586,7 +642,9 @@ def account_state(client_id: str):
             "Remove unknown third-party apps and websites that have access to your account."
         ]
         latest["notice"] = "This self-assessment uses only your profile link and checklist answers. We did not access or scan your Instagram account. It cannot predict or prevent suspension."
-    return {"success": True, "check": latest, "subscriptions": subscriptions, "premium": premium}
+    else:
+        latest = None
+    return {"success": True, "check": latest, "subscriptions": subscriptions, "premium": premium, "has_access": has_access}
 
 
 @app.post("/api/payments/webhook")

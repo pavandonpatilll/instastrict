@@ -130,7 +130,16 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
    <label class="check-item"><input type="checkbox" id="third_party_apps"> I remove unknown third-party apps</label>
   </div>
 
-  <button class="full" id="checkBtn" onclick="checkProfile()">Generate My Safety Report →</button>
+  <div class="fieldlabel">Payment details for ₹1 trial</div>
+  <div class="payment-fields">
+   <input id="payName" maxlength="100" placeholder="Your name">
+   <input id="payEmail" type="email" maxlength="150" placeholder="Email (optional)">
+   <input id="payPhone" type="tel" maxlength="20" placeholder="Mobile number">
+  </div>
+  <div id="savedAccount" class="account-box" style="display:none"></div>
+  <button class="full" id="checkBtn" onclick="continueWithTrial()">Continue ₹1 Trial →</button>
+  <p id="paymentStatus" role="status" aria-live="polite"></p>
+  <p class="notice">₹1 upfront, then ₹159/month AutoPay scheduled after 24 hours. Review the recurring mandate details in Razorpay before approving.</p>
   <div id="result"></div>
 
   <p class="notice">No Instagram login or connection is required. Your report is generated from your profile link and checklist answers only. We do not access or scan private Instagram data, and no service can guarantee protection from suspension. Never enter your password, OTP or recovery code.</p>
@@ -227,7 +236,6 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
     <button id="monthlyPayBtn" onclick="startMonthlyPayment()">Continue ₹159/ month</button>
    </div>
   </div>
-  <p id="paymentStatus" role="status" aria-live="polite"></p>
   <p class="notice">The ₹1 upfront amount is collected during subscription authorization. The monthly recurring plan is scheduled to start 24 hours after subscription creation. Actual debit timing depends on Razorpay, your bank and mandate processing. Premium access is subject to verified payment/subscription status. Cancel future renewals using the payment provider's supported process; a debit already initiated may still be processed.</p>
   <h3>What Is Included</h3>
   <p>Access to InstaRaksha account-safety guidance features available under the selected plan. Reports are based on the information you submit and do not scan Instagram account data.</p>
@@ -381,6 +389,14 @@ function restoreLocalState(){
   Object.entries(state.answers||{}).forEach(([k,v])=>{if($(k))$(k).checked=!!v;});
  }catch(e){}
 }
+function renderReport(report){
+ const result=$("result");
+ if(!report){result.style.display="none";result.innerHTML="";return;}
+ const tips=report.tips||[];
+ result.style.display="block";
+ result.innerHTML=`<strong style="color:#65e6a1">✓ Your paid safety report</strong><p>Profile: @${escapeHtml(report.username||"")}</p><div class="score-row"><div class="score">${Number(report.score)||0}%</div><div style="flex:1"><b>Security habits score</b><div class="meter"><div style="width:${Math.max(0,Math.min(100,Number(report.score)||0))}%"></div></div><small style="color:#aaa">Based only on your five answers</small></div></div><p>${escapeHtml(report.notice||"")}</p><strong>Recommended account-safety steps:</strong><ul>${tips.map(t=>"<li>"+escapeHtml(t)+"</li>").join("")}</ul><p class="notice">Your report is saved to your website browser account and server record.</p>`;
+ localStorage.setItem("instaraksha_report_cache_v1",JSON.stringify(report));
+}
 function showSavedAccount(account){
  const box=$("savedAccount");
  if(!account || (!account.check && !(account.subscriptions||[]).length))return;
@@ -393,33 +409,27 @@ function showSavedAccount(account){
  box.innerHTML=`<div class="live-status"><span class="live-dot"></span> YOUR SAVED INSTRAKASHA STATUS</div>
   ${c?`<strong>Last profile: @${escapeHtml(c.username)}</strong><div class="account-meta">Security habits score: ${Number(c.score)||0}% · Last report: ${escapeHtml(new Date(c.created_at).toLocaleString())}</div>`:""}
   ${sub?`<div class="account-meta" style="margin-top:8px">Plan: <strong>${sub.plan_type==="trial_1_then_159"?"₹1 + ₹159/month":"₹159/month"}</strong><br>Subscription: <strong>${escapeHtml(sub.status||"processing")}</strong></div>`:""}
-  ${account.premium?'<p style="color:#8ef0b2;margin-top:8px"><strong>✓ Premium access is active according to the latest server status.</strong></p>':'<p class="account-meta">Saved on this browser. Premium access appears after Razorpay confirms an active/authenticated subscription.</p>'}`;
+  ${account.has_access?'<p style="color:#8ef0b2;margin-top:8px"><strong>✓ Payment verified. Your report is unlocked.</strong></p>':'<p class="account-meta">Your report will appear here after Razorpay confirms payment authorization.</p>'}`;
 }
 async function refreshAccount(){
  try{
   const r=await fetch(API+"/api/account?client_id="+encodeURIComponent(CLIENT_ID),{cache:"no-store"});
-  if(!r.ok)return;
+  if(!r.ok)return null;
   const a=await r.json();
   showSavedAccount(a);
-  if(a.check){
+  if(a.check && a.has_access){
+   $("checkBtn").textContent="Update My Safety Report →";
    $("profile").value=a.check.profile_url||$("profile").value;
    const answers=a.check.answers||{};
    Object.entries(answers).forEach(([k,v])=>{if($(k))$(k).checked=!!v;});
-   if(!localStorage.getItem("instaraksha_report_cache_v1"))localStorage.setItem("instaraksha_report_cache_v1",JSON.stringify(a.check));
+   renderReport(a.check);
+  }else{
+   $("checkBtn").textContent="Continue ₹1 Trial →";
+   renderReport(null);
+   localStorage.removeItem("instaraksha_report_cache_v1");
   }
- }catch(e){}
-}
-function restoreCachedReport(){
- try{
-  const d=JSON.parse(localStorage.getItem("instaraksha_report_cache_v1")||"null");
-  if(!d)return;
-  $("pricing").classList.remove("flow-hidden");
-  $("pricingNav").classList.remove("flow-hidden");
-  $("premiumNav").classList.remove("flow-hidden");
-  const tips=d.tips||[];
-  $("result").style.display="block";
-  $("result").innerHTML=`<strong style="color:#65e6a1">✓ Your saved self-assessment</strong><p>Profile: @${escapeHtml(d.username||"")}</p><div class="score-row"><div class="score">${Number(d.score)||0}%</div><div style="flex:1"><b>Security habits score</b><div class="meter"><div style="width:${Math.max(0,Math.min(100,Number(d.score)||0))}%"></div></div><small style="color:#aaa">Based only on your five answers</small></div></div><p>${escapeHtml(d.notice||"Saved report")}</p><strong>Recommended account-safety steps:</strong><ul>${tips.map(t=>"<li>"+escapeHtml(t)+"</li>").join("")}</ul><p class="notice">Restored from your saved report. Generate again after changing your checklist.</p>`;
- }catch(e){}
+  return a;
+ }catch(e){return null;}
 }
 
 const escapeHtml = value => String(value).replace(/[&<>"']/g, c => ({
@@ -443,13 +453,15 @@ function customerDetails(){
  return {
   name:$("payName").value.trim(),
   email:$("payEmail").value.trim(),
-  contact:$("payPhone").value.trim()
+  contact:$("payPhone").value.trim(),
+  client_id:CLIENT_ID
  };
 }
 function setPaymentBusy(value, message){
  paymentBusy=value;
- $("trialPayBtn").disabled=value;
- $("monthlyPayBtn").disabled=value;
+ if($("trialPayBtn"))$("trialPayBtn").disabled=value;
+ if($("monthlyPayBtn"))$("monthlyPayBtn").disabled=value;
+ if($("checkBtn"))$("checkBtn").disabled=value;
  if(message) $("paymentStatus").textContent=message;
 }
 function openSubscriptionCheckout(subscriptionId, planTitle){
@@ -475,7 +487,8 @@ function openSubscriptionCheckout(subscriptionId, planTitle){
     });
     const data=await result.json();
     if(!result.ok) throw new Error(data.detail||"Could not verify subscription authorization.");
-    $("paymentStatus").textContent="Mandate response received. Subscription status: "+(data.subscription_status||"processing")+". Payment status: "+(data.payment_status||"processing")+". Please wait for Razorpay confirmation.";
+    const account=await refreshAccount();
+    $("paymentStatus").textContent=(account&&account.has_access)?"✓ Payment verified. Your safety report is now unlocked below.":"Payment response received. Razorpay is still confirming authorization; your report will unlock automatically when confirmed.";
    }catch(error){
     $("paymentStatus").textContent="Payment response received, but server verification needs checking: "+error.message;
    }finally{setPaymentBusy(false);}
@@ -496,7 +509,7 @@ async function startTrialPayment(){
   if(!response.ok)throw new Error(data.detail||"Payment could not be started. Please retry or contact support.");
   if(!data.subscription_id)throw new Error("Razorpay did not return a subscription ID.");
   if(data.key_id)razorpayKeyId=data.key_id;
-  setPaymentBusy(false,"One checkout is ready. Approve ₹1 upfront and the ₹159/month AutoPay mandate in the same Razorpay window.");
+  $("paymentStatus").textContent="Checkout is ready. Approve ₹1 upfront and review the ₹159/month AutoPay mandate in Razorpay.";
   openSubscriptionCheckout(data.subscription_id,"₹1 upfront today + ₹159/month AutoPay (first recurring charge scheduled after 24 hours)");
  }catch(error){
   setPaymentBusy(false,error.message);
@@ -523,67 +536,37 @@ async function startMonthlyPayment(){
 
 
 
-async function checkProfile(){
+async function continueWithTrial(){
  const btn=$("checkBtn"), result=$("result");
  const url=$("profile").value.trim();
-
-
- if(!url){
-  alert("Please enter your Instagram profile link.");
-  return;
- }
-
- const answers={
-  two_factor:$("two_factor").checked,
-  unique_password:$("unique_password").checked,
-  email_phone:$("email_phone").checked,
-  login_activity:$("login_activity").checked,
-  third_party_apps:$("third_party_apps").checked
- };
-
- btn.disabled=true;
- btn.textContent="Preparing report…";
- result.style.display="block";
- result.textContent="Please wait…";
-
+ if(!url){alert("Please enter your Instagram profile link.");return;}
+ const existingAccount=await refreshAccount();
+ const alreadyHasAccess=!!(existingAccount&&existingAccount.has_access);
+ if(!alreadyHasAccess && !$("payName").value.trim()){alert("Please enter your name for the payment.");$("payName").focus();return;}
+ if(!alreadyHasAccess && !$("payPhone").value.trim()){alert("Please enter your mobile number for the payment.");$("payPhone").focus();return;}
+ const answers={two_factor:$("two_factor").checked,unique_password:$("unique_password").checked,email_phone:$("email_phone").checked,login_activity:$("login_activity").checked,third_party_apps:$("third_party_apps").checked};
+ btn.disabled=true;btn.textContent="Saving details…";
+ result.style.display="block";result.textContent="Your profile and checklist are being saved securely. The report unlocks after confirmed payment.";
+ saveLocalState();
  try{
-  const response=await fetch(API+"/api/check",{
-   method:"POST",
-   headers:{"Content-Type":"application/json"},
-   body:JSON.stringify({profile_url:url,answers:answers,client_id:CLIENT_ID})
-  });
-
+  const response=await fetch(API+"/api/check",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({profile_url:url,answers:answers,client_id:CLIENT_ID})});
   const data=await response.json();
-
-  if(!response.ok)throw new Error(data.detail||"Something went wrong.");
-
-  result.innerHTML=`
-   <strong style="color:#65e6a1">✓ Self-assessment complete</strong>
-   <p>Profile: @${escapeHtml(data.username)}</p>
-   <div class="score-row">
-    <div class="score">${data.score}%</div>
-    <div style="flex:1">
-     <b>Security habits score</b>
-     <div class="meter"><div style="width:${data.score}%"></div></div>
-     <small style="color:#aaa">Based only on your five answers</small>
-    </div>
-   </div>
-   <p>${escapeHtml(data.notice)}</p>
-   <strong>Recommended account-safety steps:</strong>
-   <ul>${data.tips.map(t=>"<li>"+escapeHtml(t)+"</li>").join("")}</ul>
-   <p style="margin-top:18px;color:#ffb4d7"><strong>Your self-assessment is ready.</strong> This is not a live Instagram scan or a prediction of suspension. Choose a Premium plan below to continue.</p>`;
-  localStorage.setItem("instaraksha_report_cache_v1",JSON.stringify(data));
-  saveLocalState();
-  $("pricing").classList.remove("flow-hidden");
-  $("pricingNav").classList.remove("flow-hidden");
-  $("premiumNav").classList.remove("flow-hidden");
-  setTimeout(()=>$("pricing").scrollIntoView({behavior:"smooth",block:"start"}),250);
-
+  if(!response.ok)throw new Error(data.detail||"Could not save your safety details.");
+  if(alreadyHasAccess || !data.payment_required){
+   const account=await refreshAccount();
+   if(account&&account.has_access){
+    result.innerHTML='<p style="color:#8ef0b2">✓ Your updated safety report is ready below.</p>';
+    return;
+   }
+  }
+  result.innerHTML='<p style="color:#8ef0b2">✓ Details saved. Opening the ₹1 trial checkout…</p>';
+  await startTrialPayment();
  }catch(error){
   result.innerHTML=`<span style="color:#ff8585">${escapeHtml(error.message)}</span>`;
+  setPaymentBusy(false);
  }finally{
-  btn.disabled=false;
-  btn.textContent="Generate My Safety Report →";
+  btn.disabled=paymentBusy;
+  btn.textContent=alreadyHasAccess?"Update My Safety Report →":"Continue ₹1 Trial →";
  }
 }
 
@@ -663,11 +646,11 @@ async function loadReviews(){
 }
 
 restoreLocalState();
-restoreCachedReport();
 document.querySelectorAll("#profile,.check-grid input").forEach(el=>el.addEventListener("change",saveLocalState));
 $("profile").addEventListener("input",saveLocalState);
 loadReviews();
 loadPaymentConfig();
+fetch(API+"/api/visit",{method:"POST",headers:{"Content-Type":"application/json"},keepalive:true,body:JSON.stringify({client_id:CLIENT_ID,path:location.pathname||"/",referrer:document.referrer||""})}).catch(()=>{});
 refreshAccount();
 </script>
 
