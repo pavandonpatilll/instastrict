@@ -126,8 +126,10 @@ async function loadDashboard(){
    ?data.reviews.map(review=>`<tr>
       <td>${review.id}</td><td>${safe(review.name)}</td>
       <td>${"★".repeat(review.rating)}</td><td>${safe(review.message)}</td>
-      <td class="${review.approved?"approved":"pending"}">${review.approved?"Approved":"Pending"}</td>
-      <td>${review.approved?"—":`<button onclick="moderateReview(${review.id},'approve')">Approve</button><button class="danger" onclick="moderateReview(${review.id},'reject')">Reject</button>`}</td>
+      <td class="${(review.status|| (review.approved?"approved":"pending"))==="approved"?"approved":"pending"}">${safe(review.status|| (review.approved?"approved":"pending"))}</td>
+      <td>${(review.status|| (review.approved?"approved":"pending"))==="approved"
+       ?`<button class="danger" onclick="moderateReview(${review.id},'reject')">Hide</button>`
+       :`<button onclick="moderateReview(${review.id},'approve')">Publish</button><button class="danger" onclick="moderateReview(${review.id},'reject')">Hide</button>`}</td>
      </tr>`).join("")
    :'<tr><td colspan="6">No reviews submitted yet.</td></tr>';
 

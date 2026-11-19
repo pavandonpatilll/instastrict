@@ -69,9 +69,21 @@ def init_db():
                 rating INTEGER NOT NULL,
                 message TEXT NOT NULL,
                 approved INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending'
             )
         """)
+        review_columns = {row["name"] for row in conn.execute("PRAGMA table_info(reviews)").fetchall()}
+        if "status" not in review_columns:
+            conn.execute("ALTER TABLE reviews ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'")
+            # Preserve the visibility of reviews that were already approved.
+            conn.execute("UPDATE reviews SET status=CASE WHEN approved=1 THEN 'approved' ELSE 'pending' END")
+        else:
+            conn.execute("""
+                UPDATE reviews
+                SET status = CASE WHEN approved=1 THEN 'approved' ELSE 'pending' END
+                WHERE status IS NULL OR status=''
+            """)
         conn.commit()
 
 init_db()
@@ -185,13 +197,13 @@ def create_review(data: ReviewRequest):
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
         cursor = conn.execute(
-            "INSERT INTO reviews (name, rating, message, approved, created_at) VALUES (?, ?, ?, 0, ?)",
+            "INSERT INTO reviews (name, rating, message, approved, created_at, status) VALUES (?, ?, ?, 1, ?, 'approved')",
             (name, data.rating, message, now)
         )
         conn.commit()
         review_id = cursor.lastrowid
     firestore_sync_sqlite_row("reviews", review_id)
-    return {"success": True, "id": review_id, "message": "Thank you! Your review is pending admin approval."}
+    return {"success": True, "id": review_id, "approved": True, "message": "Thank you! Your review is now published on InstaRaksha."}
 
 @app.get("/api/reviews")
 def public_reviews():
@@ -228,10 +240,10 @@ def admin_dashboard(x_admin_key: str = Header(default="")):
     yesterday_text = (today - timedelta(days=1)).isoformat()
     with get_db() as conn:
         checks = conn.execute("SELECT id, username, profile_url, created_at, score, answers, paid FROM checks ORDER BY id DESC LIMIT 200").fetchall()
-        reviews = conn.execute("SELECT id, name, rating, message, approved, created_at FROM reviews ORDER BY id DESC LIMIT 200").fetchall()
+        reviews = conn.execute("SELECT id, name, rating, message, approved, status, created_at FROM reviews ORDER BY id DESC LIMIT 200").fetchall()
         total_checks = conn.execute("SELECT COUNT(*) FROM checks").fetchone()[0]
         total_reviews = conn.execute("SELECT COUNT(*) FROM reviews").fetchone()[0]
-        pending = conn.execute("SELECT COUNT(*) FROM reviews WHERE approved=0").fetchone()[0]
+        pending = conn.execute("SELECT COUNT(*) FROM reviews WHERE status='pending'").fetchone()[0]
         total_visits = conn.execute("SELECT COUNT(*) FROM web_visits").fetchone()[0]
         unique_visitors = conn.execute("SELECT COUNT(DISTINCT client_id) FROM web_visits").fetchone()[0]
         today_visits = conn.execute("SELECT COUNT(*) FROM web_visits WHERE visit_date=?", (today_text,)).fetchone()[0]
@@ -258,7 +270,7 @@ def admin_dashboard(x_admin_key: str = Header(default="")):
 def approve_review(review_id: int, x_admin_key: str = Header(default="")):
     require_admin(x_admin_key)
     with get_db() as conn:
-        cursor = conn.execute("UPDATE reviews SET approved=1 WHERE id=?", (review_id,))
+        cursor = conn.execute("UPDATE reviews SET approved=1, status='approved' WHERE id=?", (review_id,))
         conn.commit()
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail="Review not found.")
@@ -268,14 +280,17 @@ def approve_review(review_id: int, x_admin_key: str = Header(default="")):
 @app.post("/api/admin/reviews/{review_id}/reject")
 def reject_review(review_id: int, x_admin_key: str = Header(default="")):
     require_admin(x_admin_key)
+    # Hide from public display but retain the record in SQLite and Firestore.
     with get_db() as conn:
-        cursor = conn.execute("DELETE FROM reviews WHERE id=?", (review_id,))
+        cursor = conn.execute(
+            "UPDATE reviews SET approved=0, status='hidden' WHERE id=?",
+            (review_id,)
+        )
         conn.commit()
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail="Review not found.")
-    if firestore_ready():
-        firestore_delete("reviews", str(review_id))
-    return {"success": True}
+    firestore_sync_sqlite_row("reviews", review_id)
+    return {"success": True, "status": "hidden"}
 
 # ---------------- Razorpay subscriptions integration ----------------
 import base64
@@ -469,6 +484,13 @@ def firestore_restore_empty_sqlite():
                 )
                 conn.commit()
             restored += 1
+        if table == "reviews":
+            with get_db() as conn:
+                conn.execute("""
+                    UPDATE reviews SET status=CASE WHEN approved=1 THEN 'approved' ELSE 'pending' END
+                    WHERE status IS NULL OR status='' OR (status='pending' AND approved=1)
+                """)
+                conn.commit()
         if restored:
             print(f"FIRESTORE_RESTORE: restored {restored} rows into {table}")
 
@@ -477,6 +499,10 @@ if firestore_ready():
     try:
         firestore_migrate_existing_sqlite()
         firestore_restore_empty_sqlite()
+        with get_db() as conn:
+            review_ids = [row["id"] for row in conn.execute("SELECT id FROM reviews").fetchall()]
+        for review_id in review_ids:
+            firestore_sync_sqlite_row("reviews", review_id)
     except Exception as exc:
         _firebase_error = str(exc)
         print("FIRESTORE_MIGRATION_OR_RESTORE_ERROR:", _firebase_error)
