@@ -112,7 +112,11 @@ def home():
 
 @app.get("/api/health")
 def health():
-    return {"status": "online", "service": "InstaRaksha"}
+    return {
+        "status": "online",
+        "service": "InstaRaksha",
+        "firestore": "connected" if firestore_ready() else "not_connected"
+    }
 
 @app.post("/api/check")
 def submit_profile(data: ProfileRequest):
@@ -141,6 +145,7 @@ def submit_profile(data: ProfileRequest):
         )
         conn.commit()
         record_id = cursor.lastrowid
+    firestore_sync_sqlite_row("checks", record_id)
 
     # The report itself is deliberately withheld until the payment provider confirms authorization.
     return {
@@ -161,12 +166,14 @@ def record_visit(data: VisitRequest):
     now = datetime.now(timezone.utc)
     india_now = now + timedelta(hours=5, minutes=30)
     with get_db() as conn:
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO web_visits (client_id, visit_date, path, referrer, created_at) VALUES (?, ?, ?, ?, ?)",
             (clean_customer(data.client_id, 80), india_now.date().isoformat(),
              clean_customer(data.path, 200) or "/", clean_customer(data.referrer, 500), now.isoformat())
         )
         conn.commit()
+        visit_id = cursor.lastrowid
+    firestore_sync_sqlite_row("web_visits", visit_id)
     return {"success": True}
 
 @app.post("/api/reviews")
@@ -183,6 +190,7 @@ def create_review(data: ReviewRequest):
         )
         conn.commit()
         review_id = cursor.lastrowid
+    firestore_sync_sqlite_row("reviews", review_id)
     return {"success": True, "id": review_id, "message": "Thank you! Your review is pending admin approval."}
 
 @app.get("/api/reviews")
@@ -254,6 +262,7 @@ def approve_review(review_id: int, x_admin_key: str = Header(default="")):
         conn.commit()
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail="Review not found.")
+    firestore_sync_sqlite_row("reviews", review_id)
     return {"success": True}
 
 @app.post("/api/admin/reviews/{review_id}/reject")
@@ -264,6 +273,8 @@ def reject_review(review_id: int, x_admin_key: str = Header(default="")):
         conn.commit()
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail="Review not found.")
+    if firestore_ready():
+        firestore_delete("reviews", str(review_id))
     return {"success": True}
 
 # ---------------- Razorpay subscriptions integration ----------------
@@ -319,6 +330,155 @@ def payment_db_init():
         conn.commit()
 
 payment_db_init()
+
+
+# ---------------- Firebase / Cloud Firestore persistence ----------------
+# Keep SQLite as a compatibility/cache layer during migration. Firestore is the
+# durable mirror. The service-account JSON stays in Render Secret Files.
+FIREBASE_CREDENTIALS = os.getenv(
+    "FIREBASE_CREDENTIALS",
+    "/etc/secrets/firebase-service-account.json"
+)
+_firestore = None
+_firebase_error = ""
+
+def init_firestore():
+    global _firestore, _firebase_error
+    try:
+        import firebase_admin
+        from firebase_admin import credentials, firestore
+        if not firebase_admin._apps:
+            if not os.path.isfile(FIREBASE_CREDENTIALS):
+                raise FileNotFoundError(
+                    f"Firebase credential file not found at {FIREBASE_CREDENTIALS}"
+                )
+            cred = credentials.Certificate(FIREBASE_CREDENTIALS)
+            firebase_admin.initialize_app(cred)
+        _firestore = firestore.client()
+        _firebase_error = ""
+        return True
+    except Exception as exc:
+        _firestore = None
+        _firebase_error = str(exc)
+        print("FIRESTORE_INIT_ERROR:", _firebase_error)
+        return False
+
+def firestore_ready():
+    return _firestore is not None
+
+def firestore_save(collection: str, document_id: str, data: dict):
+    if _firestore is None:
+        raise RuntimeError("Cloud Firestore is not connected. Check the Render Secret File.")
+    # Convert SQLite Row / nested JSON-compatible values into plain data.
+    clean = dict(data)
+    _firestore.collection(collection).document(str(document_id)).set(clean, merge=True)
+
+def firestore_delete(collection: str, document_id: str):
+    if _firestore is None:
+        raise RuntimeError("Cloud Firestore is not connected. Check the Render Secret File.")
+    _firestore.collection(collection).document(str(document_id)).delete()
+
+def firestore_sync_sqlite_row(table: str, row_id: int):
+    if _firestore is None:
+        raise HTTPException(status_code=503, detail="Cloud Firestore is not connected. Check the Render Secret File and deployment logs.")
+    allowed = {
+        "checks": "checks",
+        "reviews": "reviews",
+        "web_visits": "web_visits",
+        "payment_orders": "payment_orders",
+        "subscriptions": "subscriptions",
+    }
+    collection = allowed.get(table)
+    if not collection:
+        return
+    with get_db() as conn:
+        row = conn.execute(f"SELECT * FROM {table} WHERE id=?", (row_id,)).fetchone()
+    if row:
+        data = dict(row)
+        if table == "checks":
+            try:
+                data["answers"] = json.loads(data.get("answers") or "{}")
+            except Exception:
+                data["answers"] = {}
+        firestore_save(collection, str(row_id), data)
+
+def firestore_sync_by_field(table: str, field: str, value: str):
+    if _firestore is None:
+        raise HTTPException(status_code=503, detail="Cloud Firestore is not connected. Check the Render Secret File and deployment logs.")
+    allowed = {"subscriptions": "subscriptions", "payment_orders": "payment_orders"}
+    if table not in allowed or field not in {"subscription_id", "order_id"}:
+        return
+    with get_db() as conn:
+        row = conn.execute(f"SELECT * FROM {table} WHERE {field}=?", (value,)).fetchone()
+    if row:
+        firestore_sync_sqlite_row(table, row["id"])
+
+def firestore_migrate_existing_sqlite():
+    """One-time copy of current SQLite rows into Firestore; never deletes SQLite."""
+    if _firestore is None:
+        return
+    marker = _firestore.collection("_system").document("sqlite_migration_v1")
+    if marker.get().exists:
+        return
+    tables = ("checks", "reviews", "web_visits", "payment_orders", "subscriptions")
+    for table in tables:
+        with get_db() as conn:
+            rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+        for row in rows:
+            data = dict(row)
+            if table == "checks":
+                try:
+                    data["answers"] = json.loads(data.get("answers") or "{}")
+                except Exception:
+                    data["answers"] = {}
+            firestore_save(table, str(row["id"]), data)
+    marker.set({
+        "completed": True,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "tables": list(tables)
+    })
+    print("FIRESTORE_SQLITE_MIGRATION: completed")
+
+def firestore_restore_empty_sqlite():
+    """Restore a table from Firestore only when its local SQLite table is empty."""
+    if _firestore is None:
+        return
+    tables = ("checks", "reviews", "web_visits", "payment_orders", "subscriptions")
+    for table in tables:
+        with get_db() as conn:
+            count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        if count:
+            continue
+        docs = _firestore.collection(table).stream()
+        restored = 0
+        for doc in docs:
+            data = doc.to_dict() or {}
+            data.pop("__collection__", None)
+            if table == "checks" and isinstance(data.get("answers"), dict):
+                data["answers"] = json.dumps(data["answers"])
+            if not data:
+                continue
+            columns = list(data.keys())
+            placeholders = ",".join("?" for _ in columns)
+            col_sql = ",".join(columns)
+            with get_db() as conn:
+                conn.execute(
+                    f"INSERT OR IGNORE INTO {table} ({col_sql}) VALUES ({placeholders})",
+                    [data[c] for c in columns]
+                )
+                conn.commit()
+            restored += 1
+        if restored:
+            print(f"FIRESTORE_RESTORE: restored {restored} rows into {table}")
+
+init_firestore()
+if firestore_ready():
+    try:
+        firestore_migrate_existing_sqlite()
+        firestore_restore_empty_sqlite()
+    except Exception as exc:
+        _firebase_error = str(exc)
+        print("FIRESTORE_MIGRATION_OR_RESTORE_ERROR:", _firebase_error)
 
 def razorpay_request(method: str, path: str, payload=None):
     if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
@@ -403,6 +563,7 @@ def save_subscription(sub, plan_type, customer, trial_order_id=None, first_charg
             trial_order_id, first_charge_at, customer.get("client_id", ""), now, now
         ))
         conn.commit()
+    firestore_sync_by_field("subscriptions", "subscription_id", sub["id"])
 
 @app.get("/api/payments/config")
 def payments_config():
@@ -490,6 +651,7 @@ def create_trial_order(data: TrialOrderRequest):
             VALUES (?, 'trial_1_then_159', ?, 'created', ?, ?, ?, ?, ?)
         """, (order["id"], TRIAL_AMOUNT_PAISE, customer["name"], customer["email"], customer["contact"], now, now))
         conn.commit()
+    firestore_sync_by_field("payment_orders", "order_id", order["id"])
     return {"order_id": order["id"], "amount": order["amount"], "currency": order["currency"], "key_id": RAZORPAY_KEY_ID}
 
 @app.post("/api/payments/trial/complete")
@@ -511,6 +673,7 @@ def complete_trial(data: TrialCompleteRequest):
                      (data.razorpay_payment_id, datetime.now(timezone.utc).isoformat(), data.razorpay_order_id))
         existing = conn.execute("SELECT subscription_id FROM subscriptions WHERE trial_order_id=?", (data.razorpay_order_id,)).fetchone()
         conn.commit()
+    firestore_sync_by_field("payment_orders", "order_id", data.razorpay_order_id)
     if existing:
         sub = razorpay_request("GET", "/subscriptions/" + existing["subscription_id"])
         return {"subscription_id": sub["id"], "status": sub.get("status"), "start_at": sub.get("start_at")}
@@ -588,6 +751,13 @@ def verify_subscription(data: SubscriptionVerifyRequest):
               "trial_1_then_159" if (sub.get("notes", {}).get("plan_type") == "trial_1_then_159" or sub.get("notes", {}).get("trial_order_id")) else "direct_159_monthly",
               payment.get("amount", 0), payment.get("status", "authorized"), now, now))
         conn.commit()
+    firestore_sync_by_field("subscriptions", "subscription_id", data.razorpay_subscription_id)
+    firestore_sync_by_field("payment_orders", "order_id", "subauth_" + data.razorpay_subscription_id)
+    if saved_sub["client_id"]:
+        with get_db() as conn:
+            paid_rows = conn.execute("SELECT id FROM checks WHERE client_id=?", (saved_sub["client_id"],)).fetchall()
+        for paid_row in paid_rows:
+            firestore_sync_sqlite_row("checks", paid_row["id"])
     return {"success": True, "subscription_status": sub.get("status"), "payment_status": payment.get("status")}
 
 @app.get("/api/account")
@@ -626,6 +796,7 @@ def account_state(client_id: str):
                         (live_status, datetime.now(timezone.utc).isoformat(), saved_sub["subscription_id"])
                     )
                     conn.commit()
+                firestore_sync_by_field("subscriptions", "subscription_id", saved_sub["subscription_id"])
             except Exception:
                 pass
     premium_statuses = {"authenticated", "active"}
@@ -680,6 +851,10 @@ async def razorpay_webhook(request: Request):
                 conn.execute("UPDATE subscriptions SET latest_payment_id=?, updated_at=? WHERE subscription_id=?",
                              (pay_entity["id"], now, sub_id))
         conn.commit()
+    if sub_entity.get("id"):
+        firestore_sync_by_field("subscriptions", "subscription_id", sub_entity["id"])
+    if pay_entity.get("id"):
+        firestore_sync_by_field("payment_orders", "order_id", "webhook_" + pay_entity["id"])
     return {"received": True}
 
 @app.get("/api/admin/payments")
