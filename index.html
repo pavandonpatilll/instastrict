@@ -225,8 +225,8 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
   <div class="payment-options">
    <div class="payment-option">
     <h4>₹1 Start </h4>
-    <p><strong>₹1 one-time payment now</strong></p>
-    <p> Pay ₹1 once using an available payment method. After successful payment, approve a separate ₹159/month AutoPay mandate. The first recurring charge is scheduled 24 hours after the subscription is created. Actual debit timing depends on Razorpay, your bank and mandate processing.</p>
+    <p><strong>₹1 now, then ₹159 after 24 hours</strong></p>
+    <p>Authorize the ₹159/month AutoPay subscription in the same Razorpay checkout. ₹1 is collected upfront, the first ₹159 recurring charge is scheduled after 24 hours, and ₹159 is charged every month thereafter, subject to your bank and payment provider.</p>
     <button id="trialPayBtn" onclick="startTrialPayment()">Continue with ₹1 trial</button>
    </div>
    <div class="payment-option">
@@ -236,7 +236,7 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
     <button id="monthlyPayBtn" onclick="startMonthlyPayment()">Continue ₹159/ month</button>
    </div>
   </div>
-  <p class="notice">The ₹1 one-time payment is collected first. After it is verified, you must separately authorize the ₹159/month AutoPay mandate. The first recurring charge is scheduled 24 hours after subscription creation. Actual debit timing depends on Razorpay, your bank and mandate processing. Premium access is subject to verified payment/subscription status. Cancel future renewals using the payment provider's supported process; a debit already initiated may still be processed.</p>
+  <p class="notice">The ₹1 upfront amount and ₹159/month recurring subscription are presented together in Razorpay Checkout. Review the exact amount, start date and AutoPay terms shown by Razorpay before approving. The first recurring charge is scheduled 24 hours after subscription creation; actual debit timing depends on Razorpay, your bank and mandate processing. Premium access is subject to verified payment/subscription status. Cancel future renewals using the payment provider's supported process; a debit already initiated may still be processed.</p>
   <h3>What Is Included</h3>
   <p>Access to InstaRaksha account-safety guidance features available under the selected plan. Reports are based on the information you submit and do not scan Instagram account data.</p>
   <h3>Independent service notice</h3>
@@ -499,50 +499,22 @@ function openSubscriptionCheckout(subscriptionId, planTitle){
 }
 async function startTrialPayment(){
  if(paymentBusy)return;
- setPaymentBusy(true,"Creating your secure ₹1 one-time payment…");
+ setPaymentBusy(true,"Preparing your ₹1 upfront + ₹159/month AutoPay subscription…");
  try{
-  const response=await fetch(API+"/api/payments/trial/order",{
-   method:"POST",headers:{"Content-Type":"application/json"},
+  const response=await fetch(API+"/api/payments/trial/create",{
+   method:"POST",
+   headers:{"Content-Type":"application/json"},
    body:JSON.stringify(customerDetails())
   });
   const data=await response.json();
-  if(!response.ok)throw new Error(data.detail||"Payment could not be started. Please retry or contact support.");
-  if(!data.order_id)throw new Error("Razorpay did not return a payment order ID.");
+  if(!response.ok)throw new Error(data.detail||"Subscription could not be created. Please try again.");
+  if(!data.subscription_id)throw new Error("Razorpay did not return a subscription ID.");
   if(data.key_id)razorpayKeyId=data.key_id;
-  const customer=customerDetails();
-  const checkout=new Razorpay({
-   key:razorpayKeyId,
-   order_id:data.order_id,
-   name:"InstaRaksha",
-   description:"₹1 one-time payment, then ₹159/month AutoPay",
-   prefill:{name:customer.name,email:customer.email,contact:customer.contact},
-   theme:{color:"#c34bd2"},
-   handler:async function(paymentResponse){
-    try{
-     $("paymentStatus").textContent="₹1 payment received. Verifying payment and preparing your monthly AutoPay mandate…";
-     const completeResponse=await fetch(API+"/api/payments/trial/complete",{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({
-       razorpay_order_id:paymentResponse.razorpay_order_id,
-       razorpay_payment_id:paymentResponse.razorpay_payment_id,
-       razorpay_signature:paymentResponse.razorpay_signature
-      })
-     });
-     const completeData=await completeResponse.json();
-     if(!completeResponse.ok)throw new Error(completeData.detail||"₹1 payment verification failed. Contact support before paying again.");
-     if(!completeData.subscription_id)throw new Error("₹1 payment is verified, but the monthly mandate could not be prepared. Contact support.");
-     $("paymentStatus").textContent="₹1 payment verified. Now approve the ₹159/month AutoPay mandate. First recurring charge is scheduled after 24 hours.";
-     openSubscriptionCheckout(completeData.subscription_id,"₹159/month AutoPay (first recurring charge scheduled after 24 hours)");
-    }catch(error){
-     $("paymentStatus").textContent=error.message;
-     setPaymentBusy(false);
-    }
-   },
-   modal:{ondismiss:function(){setPaymentBusy(false,"Checkout closed. If your ₹1 payment was debited, do not pay again until its status is checked.");}}
-  });
-  $("paymentStatus").textContent="Pay ₹1 using an available payment method. After successful payment, approve the ₹159/month AutoPay mandate.";
-  checkout.open();
+  setPaymentBusy(false);
+  openSubscriptionCheckout(
+   data.subscription_id,
+   "₹1 upfront, then ₹159 after 24 hours and ₹159 every month"
+  );
  }catch(error){
   setPaymentBusy(false,error.message);
  }
