@@ -209,7 +209,7 @@ def create_review(data: ReviewRequest):
 def public_reviews():
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT id, name, rating, message, created_at FROM reviews WHERE approved=1 ORDER BY id DESC LIMIT 30"
+            "SELECT id, name, rating, message, created_at FROM reviews WHERE approved=1 ORDER BY id DESC"
         ).fetchall()
     return {"reviews": [dict(row) for row in rows]}
 
@@ -240,7 +240,7 @@ def admin_dashboard(x_admin_key: str = Header(default="")):
     yesterday_text = (today - timedelta(days=1)).isoformat()
     with get_db() as conn:
         checks = conn.execute("SELECT id, username, profile_url, created_at, score, answers, paid FROM checks ORDER BY id DESC LIMIT 200").fetchall()
-        reviews = conn.execute("SELECT id, name, rating, message, approved, status, created_at FROM reviews ORDER BY id DESC LIMIT 200").fetchall()
+        reviews = conn.execute("SELECT id, name, rating, message, approved, status, created_at FROM reviews ORDER BY id DESC").fetchall()
         total_checks = conn.execute("SELECT COUNT(*) FROM checks").fetchone()[0]
         total_reviews = conn.execute("SELECT COUNT(*) FROM reviews").fetchone()[0]
         pending = conn.execute("SELECT COUNT(*) FROM reviews WHERE status='pending'").fetchone()[0]

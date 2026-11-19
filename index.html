@@ -306,7 +306,7 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
   <h3>2. How Information Is Used</h3>
   <ul>
    <li>To generate the self-assessment report based on your checklist answers.</li>
-   <li>To receive, moderate and display community reviews after approval.</li>
+   <li>To receive, moderate and display community reviews immediately after submission unless hidden by the admin.</li>
    <li>To maintain, secure and improve the website and respond to support requests.</li>
   </ul>
 
@@ -626,7 +626,7 @@ async function loadReviews(){
  const box=$("reviewList");
 
  try{
-  const response=await fetch(API+"/api/reviews");
+  const response=await fetch(API+"/api/reviews",{cache:"no-store"});
   const data=await response.json();
 
   if(!response.ok)throw new Error("Reviews unavailable");

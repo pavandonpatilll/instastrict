@@ -60,7 +60,7 @@ a{color:#e8a5ff;overflow-wrap:anywhere}.tablewrap{overflow-x:auto}small,.muted{c
 
 <div class="card">
  <h3>Customer Reviews</h3>
- <small>Only approve genuine and appropriate user-submitted reviews. No dummy reviews are preloaded.</small>
+ <small>New user reviews are published automatically and appear here immediately. Use Hide only when a review must be removed from public display; hidden records are retained.</small>
  <div class="tablewrap"><table>
  <thead><tr><th>ID</th><th>Name</th><th>Rating</th><th>Review</th><th>Status</th><th>Action</th></tr></thead>
  <tbody id="reviewRows"><tr><td colspan="6">Please login first.</td></tr></tbody>
@@ -96,7 +96,7 @@ async function loadDashboard(){
  const status=document.getElementById("status");
  status.textContent="Loading…";
  try{
-  const response=await fetch(API+"/api/admin/dashboard",{
+  const response=await fetch(API+"/api/admin/dashboard",{cache:"no-store",
    headers:{"X-Admin-Key":adminKey}
   });
   const data=await response.json();
