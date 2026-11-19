@@ -137,7 +137,7 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
    <input id="payPhone" type="tel" maxlength="10" placeholder="Mobile number">
   </div>
   <div id="savedAccount" class="account-box" style="display:none"></div>
-  <button class="full" id="checkBtn" onclick="continueWithTrial()">Continue ₹1 Trial →</button>
+  <button class="full" id="checkBtn" onclick="continueWithTrial()">first month free →</button>
   <p id="paymentStatus" role="status" aria-live="polite"></p>
   <p class="notice">₹1 upfront, then monthly AutoPay scheduled after 24 hours. Review the recurring mandate details in Razorpay before approving.</p>
   <div id="result"></div>
@@ -424,7 +424,7 @@ async function refreshAccount(){
    Object.entries(answers).forEach(([k,v])=>{if($(k))$(k).checked=!!v;});
    renderReport(a.check);
   }else{
-   $("checkBtn").textContent="Continue ₹1 Trial →";
+   $("checkBtn").textContent="first month free →";
    renderReport(null);
    localStorage.removeItem("instaraksha_report_cache_v1");
   }
@@ -566,7 +566,7 @@ async function continueWithTrial(){
   setPaymentBusy(false);
  }finally{
   btn.disabled=paymentBusy;
-  btn.textContent=alreadyHasAccess?"Update My Safety Report →":"Continue ₹1 Trial →";
+  btn.textContent=alreadyHasAccess?"Update My Safety Report →":"first month free →";
  }
 }
 
