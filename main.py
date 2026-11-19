@@ -342,6 +342,7 @@ FIREBASE_CREDENTIALS = os.getenv(
 _firestore = None
 _firebase_error = ""
 
+
 def init_firestore():
     global _firestore, _firebase_error
     try:
