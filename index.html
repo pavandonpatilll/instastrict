@@ -93,6 +93,19 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
  .account-meta{font-size:12px;color:#b7c9c0;line-height:1.7;margin-top:6px}
 .flow-hidden{display:none!important}
 @media(max-width:600px){.payment-fields{grid-template-columns:1fr}}
+
+/* Adsterra banner slots */
+.ad-slot{width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;margin:24px auto;padding:12px 10px;overflow:hidden}
+.ad-slot-label{font-size:10px;letter-spacing:1px;color:#858397;text-transform:uppercase}
+.ad-slot-300{max-width:324px;min-height:274px}
+.ad-slot-320{max-width:344px;min-height:74px}
+.ad-slot iframe{max-width:100%;border:0}
+@media(max-width:600px){
+ .ad-slot{margin:18px auto;padding:10px 5px}
+ .ad-slot-300{min-height:274px}
+ .ad-slot-320{min-height:74px}
+}
+
 </style>
 </head>
 
@@ -146,7 +159,22 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
  </div>
 </div>
 
-
+<!-- Adsterra 300x250 banner -->
+<div class="ad-slot ad-slot-300" aria-label="Advertisement">
+ <span class="ad-slot-label">Advertisement</span>
+ <div id="adsterra-300x250">
+  <script>
+   atOptions = {
+    'key' : '260ab7f52cb505d69b28bf8232e11e08',
+    'format' : 'iframe',
+    'height' : 250,
+    'width' : 300,
+    'params' : {}
+   };
+  </script>
+  <script src="https://bicea.org/22/260ab7f52cb505d69b28bf8232e11e08"></script>
+ </div>
+</div>
 
 <section id="features">
  <h2>Your Account Safety Toolkit</h2>
@@ -157,6 +185,23 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
   <div class="feature"><div class="emoji">📋</div><h3>Recovery Help</h3><p>Find guidance on official Instagram account recovery options.</p></div>
  </div>
 </section>
+
+<!-- Adsterra 320x50 banner -->
+<div class="ad-slot ad-slot-320" aria-label="Advertisement">
+ <span class="ad-slot-label">Advertisement</span>
+ <div id="adsterra-320x50">
+  <script>
+   atOptions = {
+    'key' : '562fb27cff5055553aea53923c1723fd',
+    'format' : 'iframe',
+    'height' : 50,
+    'width' : 320,
+    'params' : {}
+   };
+  </script>
+  <script src="https://bicea.org/22/562fb27cff5055553aea53923c1723fd"></script>
+ </div>
+</div>
 
 <section>
  <h2>Simple Steps. Safer Account.</h2>
