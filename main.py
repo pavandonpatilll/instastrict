@@ -12,8 +12,8 @@ from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="InstaRaksha API", version="2.0")
-DB_NAME = os.getenv("DB_NAME", "instaraksha.db")
+app = FastAPI(title="Instastrict API", version="2.0")
+DB_NAME = os.getenv("DB_NAME", "Instastrict.db")
 ADMIN_KEY = os.getenv("ADMIN_KEY", "change-this-admin-key")
 
 # Development-friendly. Restrict allow_origins to your real domain before deployment.
@@ -120,13 +120,13 @@ def require_admin(key: str):
 
 @app.get("/")
 def home():
-    return {"message": "InstaRaksha API is running", "status": "ok"}
+    return {"message": "Instastrict API is running", "status": "ok"}
 
 @app.get("/api/health")
 def health():
     return {
         "status": "online",
-        "service": "InstaRaksha",
+        "service": "Instastrict",
         "firestore": "connected" if firestore_ready() else "not_connected"
     }
 
@@ -203,7 +203,7 @@ def create_review(data: ReviewRequest):
         conn.commit()
         review_id = cursor.lastrowid
     firestore_sync_sqlite_row("reviews", review_id)
-    return {"success": True, "id": review_id, "approved": True, "message": "Thank you! Your review is now published on InstaRaksha."}
+    return {"success": True, "id": review_id, "approved": True, "message": "Thank you! Your review is now published on Instastrict."}
 
 @app.get("/api/reviews")
 def public_reviews():
@@ -627,7 +627,7 @@ def create_trial_subscription(data: CheckoutCustomer):
         # Razorpay collects this upfront amount as part of subscription authorization.
         "addons": [{
             "item": {
-                "name": "InstaRaksha one-time trial payment",
+                "name": "Instastrict one-time trial payment",
                 "amount": TRIAL_AMOUNT_PAISE,
                 "currency": "INR"
             }
