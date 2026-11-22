@@ -561,7 +561,7 @@ function openSubscriptionCheckout(subscriptionId, planTitle){
 }
 async function startTrialPayment(){
  if(paymentBusy)return;
- setPaymentBusy(true,"Preparing your ₹1 upfront + ₹159/month AutoPay subscription…");
+ setPaymentBusy(true,"Preparing your ₹1 upfront  AutoPay subscription…");
  try{
   const response=await fetch(API+"/api/payments/trial/create",{
    method:"POST",
