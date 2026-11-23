@@ -106,10 +106,40 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
  .ad-slot-320{min-height:74px}
 }
 
+
+/* First-visit contact details gate */
+.lead-gate{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:18px;background:rgba(4,5,14,.96);backdrop-filter:blur(8px)}
+.lead-gate-card{width:min(100%,460px);background:#171827;border:1px solid #654477;border-radius:20px;padding:26px;box-shadow:0 20px 70px rgba(0,0,0,.5)}
+.lead-gate-card h2{font-size:25px;color:#ff83c2;margin:0 0 9px}.lead-gate-card p{color:#c4c4d2;font-size:13px;line-height:1.65;margin:0 0 14px}
+.lead-gate-card label.fieldlabel{display:block;margin:13px 0 8px;font-weight:bold;color:#fff}
+.lead-gate-card .consent-row{display:flex;align-items:flex-start;gap:10px;margin:14px 0;color:#c4c4d2;font-size:12px;line-height:1.55}
+.lead-gate-card .consent-row input{width:auto;min-width:17px;margin:2px 0 0;accent-color:#d64cba}
+.lead-gate-card .optional-consent{border-top:1px solid #353348;padding-top:12px}
+.lead-gate-card button{width:100%;margin-top:8px}
+.lead-gate-error{min-height:18px;color:#ff9b9b;font-size:12px;margin-top:9px}
+body.lead-gate-open{overflow:hidden}
+
 </style>
 </head>
 
 <body>
+
+<div id="leadGate" class="lead-gate" aria-modal="true" role="dialog" aria-labelledby="leadGateTitle" style="display:none">
+ <form id="leadGateForm" class="lead-gate-card">
+  <div class="tag">🛡️ INSTASTRICT</div>
+  <h2 id="leadGateTitle">Welcome! आगे बढ़ने के लिए details भरें</h2>
+  <p>अपना नाम और मोबाइल नंबर दें। हम इन्हें आपकी वेबसाइट एंट्री, सहायता और आपके अनुरोधों को संभालने के लिए सुरक्षित रूप से सेव करेंगे।</p>
+  <label class="fieldlabel" for="leadName">Your name *</label>
+  <input id="leadName" name="name" type="text" maxlength="100" autocomplete="name" placeholder="अपना नाम लिखें" required>
+  <label class="fieldlabel" for="leadPhone">Mobile number *</label>
+  <input id="leadPhone" name="phone" type="tel" inputmode="numeric" maxlength="10" autocomplete="tel-national" pattern="[6-9][0-9]{9}" placeholder="10-digit mobile number" required>
+  <label class="consent-row"><input id="leadPrivacyConsent" type="checkbox" required><span>मैं सहमत हूँ कि InstaStrict मेरा नाम और मोबाइल नंबर अपनी <a href="#privacy" style="color:#e6b5ff">Privacy Policy</a> के अनुसार सेव और इस्तेमाल करे। *</span></label>
+  <label class="consent-row optional-consent"><input id="leadWhatsappOptIn" type="checkbox"><span>मैं WhatsApp पर InstaStrict के प्लान, अपडेट और सहायता संबंधी संदेश प्राप्त करने की अनुमति देता/देती हूँ। (Optional)</span></label>
+  <button id="leadContinueBtn" type="submit">Next →</button>
+  <div id="leadGateError" class="lead-gate-error" role="status" aria-live="polite"></div>
+  <p style="font-size:11px;margin:8px 0 0">* Required. हम Instagram password, OTP या recovery code नहीं मांगते।</p>
+ </form>
+</div>
 
 
 <header>
@@ -363,10 +393,11 @@ footer{text-align:center;padding:30px;color:#999;border-top:1px solid #29283a;fo
   <p><strong>Last updated: 9 November 2026</strong></p>
 
   <h3>1. Information We Collect</h3>
-  <p>When you use the safety checklist, you may provide an Instagram profile URL and answers to the security checklist. When you submit a community review, we collect the name, rating and review text you enter. Technical information may also be processed by our hosting and service providers to operate and protect the website.</p>
+  <p>On a first visit, we ask for your name and mobile number before access. We store these details with a browser-generated visitor ID, entry time and limited referral/campaign information to manage website access, support and enquiries. A separate optional checkbox records permission to send WhatsApp marketing and plan updates. When you use the safety checklist, you may provide an Instagram profile URL and answers. When you submit a community review, we collect the name, rating and review text. Technical information may also be processed by our hosting and service providers.</p>
 
   <h3>2. How Information Is Used</h3>
   <ul>
+   <li>To manage website visitor records, respond to support requests and, only if you separately opt in, send WhatsApp plan or service updates.</li>
    <li>To generate the self-assessment report based on your checklist answers.</li>
    <li>To receive, moderate and display community reviews immediately after submission unless hidden by the admin.</li>
    <li>To maintain, secure and improve the website and respond to support requests.</li>
@@ -437,6 +468,61 @@ function getClientId(){
  return id;
 }
 const CLIENT_ID = getClientId();
+const LEAD_KEY = "Instastrict_lead_details_v1";
+let visitorLead = null;
+function applyLeadToForms(lead){
+ document.querySelectorAll('[id="payName"]').forEach(el=>{if(!el.value)el.value=lead.name||"";});
+ document.querySelectorAll('[id="payPhone"]').forEach(el=>{if(!el.value)el.value=lead.phone||"";});
+ if($("reviewName")&&!$("reviewName").value)$("reviewName").value=lead.name||"";
+}
+async function saveVisitorLead(lead){
+ const response=await fetch(API+"/api/leads",{
+  method:"POST",headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({...lead,client_id:CLIENT_ID,referrer:document.referrer||"",
+   utm_source:new URLSearchParams(location.search).get("utm_source")||"",
+   utm_campaign:new URLSearchParams(location.search).get("utm_campaign")||""})
+ });
+ const data=await response.json();
+ if(!response.ok)throw new Error(data.detail||"Could not securely save your details. Please try again.");
+ return data;
+}
+function openLeadGate(){
+ const gate=$("leadGate");gate.style.display="flex";document.body.classList.add("lead-gate-open");
+ setTimeout(()=>$("leadName").focus(),100);
+}
+function closeLeadGate(){
+ $("leadGate").style.display="none";document.body.classList.remove("lead-gate-open");
+}
+async function initializeLeadGate(){
+ let saved=null;
+ try{saved=JSON.parse(localStorage.getItem(LEAD_KEY)||"null");}catch(e){}
+ if(saved&&saved.name&&saved.phone&&saved.privacy_consent){
+  visitorLead=saved;applyLeadToForms(saved);
+  // Refresh last-seen and keep the server/Firestore record in sync on returning visits.
+  saveVisitorLead(saved).catch(err=>console.warn("Lead sync unavailable:",err));
+  return;
+ }
+ openLeadGate();
+}
+$("leadGateForm").addEventListener("submit",async event=>{
+ event.preventDefault();
+ const name=$("leadName").value.trim();
+ const phone=$("leadPhone").value.replace(/\D/g,"").slice(-10);
+ const privacyConsent=$("leadPrivacyConsent").checked;
+ const whatsappOptIn=$("leadWhatsappOptIn").checked;
+ const error=$("leadGateError"),button=$("leadContinueBtn");
+ if(name.length<2){error.textContent="Please enter your name (at least 2 characters).";return;}
+ if(!/^[6-9]\d{9}$/.test(phone)){error.textContent="Please enter a valid 10-digit Indian mobile number.";return;}
+ if(!privacyConsent){error.textContent="Please agree to the Privacy Policy to continue.";return;}
+ const lead={name,phone,privacy_consent:true,whatsapp_opt_in:whatsappOptIn};
+ button.disabled=true;button.textContent="Saving securely…";error.textContent="";
+ try{
+  await saveVisitorLead(lead);
+  visitorLead=lead;localStorage.setItem(LEAD_KEY,JSON.stringify(lead));
+  applyLeadToForms(lead);closeLeadGate();
+ }catch(err){error.textContent=err.message||"Unable to save details. Please retry.";}
+ finally{button.disabled=false;button.textContent="Next →";}
+});
 function saveLocalState(){
  const state={
   profile:$("profile").value.trim(),
@@ -714,6 +800,7 @@ async function loadReviews(){
 }
 
 restoreLocalState();
+initializeLeadGate();
 document.querySelectorAll("#profile,.check-grid input").forEach(el=>el.addEventListener("change",saveLocalState));
 $("profile").addEventListener("input",saveLocalState);
 loadReviews();

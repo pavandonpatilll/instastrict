@@ -32,6 +32,7 @@ a{color:#e8a5ff;overflow-wrap:anywhere}.tablewrap{overflow-x:auto}small,.muted{c
 <div class="card">
  <div class="stats">
   <div class="stat">Total profile checks<div class="number" id="totalChecks">--</div></div>
+  <div class="stat">Visitor leads<div class="number" id="totalLeads">--</div></div>
   <div class="stat">Total reviews<div class="number" id="totalReviews">--</div></div>
   <div class="stat">Pending reviews<div class="number" id="pendingReviews">--</div></div>
   <div class="stat">Total website visits<div class="number" id="totalVisits">--</div></div>
@@ -47,6 +48,15 @@ a{color:#e8a5ff;overflow-wrap:anywhere}.tablewrap{overflow-x:auto}small,.muted{c
  <div class="tablewrap"><table>
   <thead><tr><th>Date (India)</th><th>Page visits</th><th>Unique browsers</th></tr></thead>
   <tbody id="visitRows"><tr><td colspan="3">Please login first.</td></tr></tbody>
+ </table></div>
+</div>
+
+<div class="card">
+ <h3>New Visitor Leads</h3>
+ <p class="muted">Name and mobile are collected at first entry. WhatsApp contact link is shown only when the visitor separately opted in to receive WhatsApp updates.</p>
+ <div class="tablewrap"><table>
+  <thead><tr><th>ID</th><th>Name</th><th>Mobile</th><th>Plan status</th><th>WhatsApp permission</th><th>First visit</th><th>Last seen</th><th>Campaign</th><th>Contact</th></tr></thead>
+  <tbody id="leadRows"><tr><td colspan="9">Please login first.</td></tr></tbody>
  </table></div>
 </div>
 
@@ -103,6 +113,20 @@ async function loadDashboard(){
   if(!response.ok)throw new Error(data.detail||"Login failed.");
 
   document.getElementById("totalChecks").textContent=data.total_checks;
+  document.getElementById("totalLeads").textContent=data.total_leads??(data.leads||[]).length;
+  document.getElementById("leadRows").innerHTML=(data.leads||[]).length
+   ?data.leads.map(lead=>{
+      const phone=String(lead.phone||"").replace(/\D/g,"");
+      const contact=lead.whatsapp_opt_in
+       ?`<a href="https://wa.me/91${phone}" target="_blank" rel="noopener noreferrer">Message on WhatsApp</a>`
+       :'<span class="pending">No WhatsApp opt-in</span>';
+      return `<tr><td>${lead.id}</td><td>${safe(lead.name)}</td><td>${safe(lead.phone)}</td>
+       <td class="${lead.has_paid?"approved":"pending"}">${lead.has_paid?"Plan active/paid":"No confirmed plan"}</td>
+       <td class="${lead.whatsapp_opt_in?"approved":"pending"}">${lead.whatsapp_opt_in?"Yes":"No"}</td>
+       <td>${safe(new Date(lead.created_at).toLocaleString())}</td><td>${safe(new Date(lead.last_seen||lead.updated_at).toLocaleString())}</td>
+       <td>${safe(lead.utm_campaign||lead.utm_source||"—")}</td><td>${contact}</td></tr>`;
+    }).join("")
+   :'<tr><td colspan="9">No visitor leads yet.</td></tr>';
   document.getElementById("totalReviews").textContent=data.total_reviews;
   document.getElementById("pendingReviews").textContent=data.pending_reviews;
   document.getElementById("totalVisits").textContent=data.total_visits??0;

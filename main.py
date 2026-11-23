@@ -84,6 +84,29 @@ def init_db():
                 SET status = CASE WHEN approved=1 THEN 'approved' ELSE 'pending' END
                 WHERE status IS NULL OR status=''
             """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS leads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                phone TEXT NOT NULL,
+                privacy_consent INTEGER NOT NULL DEFAULT 0,
+                privacy_consent_at TEXT NOT NULL DEFAULT '',
+                whatsapp_opt_in INTEGER NOT NULL DEFAULT 0,
+                whatsapp_opt_in_at TEXT NOT NULL DEFAULT '',
+                referrer TEXT NOT NULL DEFAULT '',
+                utm_source TEXT NOT NULL DEFAULT '',
+                utm_campaign TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_seen TEXT NOT NULL
+            )
+        """)
+        lead_columns = {row["name"] for row in conn.execute("PRAGMA table_info(leads)").fetchall()}
+        if "privacy_consent_at" not in lead_columns:
+            conn.execute("ALTER TABLE leads ADD COLUMN privacy_consent_at TEXT NOT NULL DEFAULT ''")
+        if "whatsapp_opt_in_at" not in lead_columns:
+            conn.execute("ALTER TABLE leads ADD COLUMN whatsapp_opt_in_at TEXT NOT NULL DEFAULT ''")
         conn.commit()
 
 init_db()
@@ -98,6 +121,16 @@ class ReviewRequest(BaseModel):
     name: str = Field(min_length=2, max_length=50)
     rating: int = Field(ge=1, le=5)
     message: str = Field(min_length=5, max_length=500)
+
+class LeadRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
+    phone: str = Field(min_length=10, max_length=20)
+    client_id: str = Field(min_length=20, max_length=80)
+    privacy_consent: bool
+    whatsapp_opt_in: bool = False
+    referrer: str = Field(default="", max_length=500)
+    utm_source: str = Field(default="", max_length=120)
+    utm_campaign: str = Field(default="", max_length=160)
 
 def validate_instagram_url(value: str):
     value = value.strip()
@@ -167,6 +200,42 @@ def submit_profile(data: ProfileRequest):
         "payment_required": not has_existing_access,
         "message": "Your safety assessment is saved. Complete the ₹1 trial checkout to unlock your report."
     }
+
+@app.post("/api/leads")
+def save_lead(data: LeadRequest):
+    name = clean_customer(data.name, 100)
+    phone = re.sub(r"\D", "", data.phone)
+    if phone.startswith("91") and len(phone) == 12:
+        phone = phone[2:]
+    if not re.fullmatch(r"[6-9]\d{9}", phone):
+        raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
+    client_id = clean_customer(data.client_id, 80)
+    if len(client_id) < 20:
+        raise HTTPException(status_code=400, detail="Invalid visitor session. Please refresh and try again.")
+    if not data.privacy_consent:
+        raise HTTPException(status_code=400, detail="Privacy Policy consent is required to continue.")
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO leads
+            (client_id, name, phone, privacy_consent, privacy_consent_at, whatsapp_opt_in, whatsapp_opt_in_at, referrer, utm_source, utm_campaign, created_at, updated_at, last_seen)
+            VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(client_id) DO UPDATE SET
+              name=excluded.name, phone=excluded.phone, privacy_consent=1,
+              privacy_consent_at=CASE WHEN leads.privacy_consent=1 THEN leads.privacy_consent_at ELSE excluded.privacy_consent_at END,
+              whatsapp_opt_in=excluded.whatsapp_opt_in,
+              whatsapp_opt_in_at=CASE WHEN excluded.whatsapp_opt_in=0 THEN '' WHEN leads.whatsapp_opt_in=1 THEN leads.whatsapp_opt_in_at ELSE excluded.whatsapp_opt_in_at END,
+              referrer=excluded.referrer, utm_source=excluded.utm_source, utm_campaign=excluded.utm_campaign,
+              updated_at=excluded.updated_at, last_seen=excluded.last_seen
+        """, (client_id, name, phone, now, 1 if data.whatsapp_opt_in else 0,
+              now if data.whatsapp_opt_in else "", clean_customer(data.referrer, 500),
+              clean_customer(data.utm_source, 120), clean_customer(data.utm_campaign, 160), now, now, now))
+        row = conn.execute("SELECT id FROM leads WHERE client_id=?", (client_id,)).fetchone()
+        conn.commit()
+        lead_id = row["id"]
+    firestore_sync_sqlite_row("leads", lead_id)
+    return {"success": True, "lead_id": lead_id, "message": "Your details have been saved securely."}
+
 
 class VisitRequest(BaseModel):
     client_id: str = Field(min_length=20, max_length=80)
@@ -241,6 +310,14 @@ def admin_dashboard(x_admin_key: str = Header(default="")):
     with get_db() as conn:
         checks = conn.execute("SELECT id, username, profile_url, created_at, score, answers, paid FROM checks ORDER BY id DESC LIMIT 200").fetchall()
         reviews = conn.execute("SELECT id, name, rating, message, approved, status, created_at FROM reviews ORDER BY id DESC").fetchall()
+        leads = conn.execute("""
+            SELECT l.*,
+            CASE WHEN EXISTS (SELECT 1 FROM checks c WHERE c.client_id=l.client_id AND c.paid=1)
+              OR EXISTS (SELECT 1 FROM subscriptions s WHERE s.client_id=l.client_id AND lower(s.status) IN ('authenticated','active'))
+              THEN 1 ELSE 0 END AS has_paid
+            FROM leads l ORDER BY l.id DESC LIMIT 1000
+        """).fetchall()
+        total_leads = conn.execute("SELECT COUNT(*) FROM leads").fetchone()[0]
         total_checks = conn.execute("SELECT COUNT(*) FROM checks").fetchone()[0]
         total_reviews = conn.execute("SELECT COUNT(*) FROM reviews").fetchone()[0]
         pending = conn.execute("SELECT COUNT(*) FROM reviews WHERE status='pending'").fetchone()[0]
@@ -253,6 +330,8 @@ def admin_dashboard(x_admin_key: str = Header(default="")):
         visits_by_day = conn.execute("SELECT visit_date, COUNT(*) AS visits, COUNT(DISTINCT client_id) AS unique_visitors FROM web_visits GROUP BY visit_date ORDER BY visit_date DESC LIMIT 14").fetchall()
     return {
         "total_checks": total_checks,
+        "total_leads": total_leads,
+        "leads": [dict(row) for row in leads],
         "total_reviews": total_reviews,
         "pending_reviews": pending,
         "total_visits": total_visits,
@@ -401,6 +480,7 @@ def firestore_sync_sqlite_row(table: str, row_id: int):
         "checks": "checks",
         "reviews": "reviews",
         "web_visits": "web_visits",
+        "leads": "leads",
         "payment_orders": "payment_orders",
         "subscriptions": "subscriptions",
     }
@@ -436,7 +516,7 @@ def firestore_migrate_existing_sqlite():
     marker = _firestore.collection("_system").document("sqlite_migration_v1")
     if marker.get().exists:
         return
-    tables = ("checks", "reviews", "web_visits", "payment_orders", "subscriptions")
+    tables = ("checks", "reviews", "web_visits", "leads", "payment_orders", "subscriptions")
     for table in tables:
         with get_db() as conn:
             rows = conn.execute(f"SELECT * FROM {table}").fetchall()
@@ -459,7 +539,7 @@ def firestore_restore_empty_sqlite():
     """Restore a table from Firestore only when its local SQLite table is empty."""
     if _firestore is None:
         return
-    tables = ("checks", "reviews", "web_visits", "payment_orders", "subscriptions")
+    tables = ("checks", "reviews", "web_visits", "leads", "payment_orders", "subscriptions")
     for table in tables:
         with get_db() as conn:
             count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
